@@ -91,14 +91,59 @@
     color:#6b6a61;
     margin:0 0 12px;
   }
-  video, canvas.preview{
+
+  /* --- Camera + overlay guida --- */
+  .cam-frame{
+    position:relative;
     width:100%;
     border-radius:8px;
+    overflow:hidden;
     background:#000;
-    display:block;
+    display:none;
   }
-  video{ display:none; }
-  video.active{ display:block; }
+  .cam-frame.active{ display:block; }
+  video{
+    display:block;
+    width:100%;
+    height:auto;
+  }
+  .cam-guide{
+    position:absolute;
+    inset:0;
+    pointer-events:none;
+  }
+  .card-box{
+    position:absolute;
+    border:2px solid rgba(255,255,255,0.85);
+    border-radius:10px;
+    box-shadow:0 0 0 2000px rgba(0,0,0,0.45);
+  }
+  .mrz-band{
+    position:absolute;
+    border:2px solid #ffd166;
+    background:rgba(255,209,102,0.14);
+    border-radius:4px;
+  }
+  .mrz-label{
+    position:absolute;
+    font-family:var(--mono);
+    font-size:11px;
+    color:#101820;
+    background:#ffd166;
+    padding:2px 6px;
+    border-radius:4px;
+    white-space:nowrap;
+  }
+  .cam-caption{
+    position:absolute;
+    left:0; right:0; bottom:8px;
+    text-align:center;
+    font-family:var(--mono);
+    font-size:11px;
+    color:#fff;
+    text-shadow:0 1px 2px rgba(0,0,0,0.6);
+  }
+
   .thumb{
     width:100%;
     border-radius:8px;
@@ -106,6 +151,26 @@
     border:1px solid var(--line);
   }
   .thumb.show{ display:block; }
+
+  .crop-preview{
+    display:none;
+    width:100%;
+    margin-top:8px;
+    border-radius:6px;
+    border:1px solid var(--line);
+    background:#000;
+    image-rendering:pixelated;
+  }
+  .crop-preview.show{ display:block; }
+  .crop-preview-label{
+    display:none;
+    font-family:var(--mono);
+    font-size:11px;
+    color:#6b6a61;
+    margin-top:6px;
+  }
+  .crop-preview-label.show{ display:block; }
+
   .btn-row{
     display:flex;
     gap:8px;
@@ -242,10 +307,20 @@
       <span class="step-num">1</span>
       <h2>Retro della carta — dati anagrafici</h2>
     </div>
-    <p class="hint">Inquadra le 3 righe di testo maiuscolo con i simboli «&lt;» in basso al retro. Tienila ferma, buona luce, niente riflessi.</p>
+    <p class="hint">Allinea la carta al riquadro bianco. La fascia gialla in basso deve contenere le 3 righe di testo maiuscolo con i simboli «&lt;»: è l'unica parte che verrà letta.</p>
 
-    <video id="videoMrz" playsinline autoplay muted></video>
+    <div class="cam-frame" id="frameMrz">
+      <video id="videoMrz" playsinline autoplay muted></video>
+      <div class="cam-guide" id="guideMrz">
+        <div class="card-box" id="cardBoxMrz"></div>
+        <div class="mrz-band" id="mrzBandMrz"></div>
+        <div class="mrz-label" id="mrzLabelMrz">Zona MRZ</div>
+      </div>
+      <div class="cam-caption">Inquadra il retro dentro il riquadro</div>
+    </div>
     <img id="thumbMrz" class="thumb" alt="Foto del retro della carta">
+    <img id="cropMrz" class="crop-preview" alt="Fascia MRZ ritagliata">
+    <div class="crop-preview-label" id="cropMrzLabel">Ritaglio inviato all'OCR</div>
 
     <div class="btn-row">
       <button id="btnStartMrz">Attiva fotocamera</button>
@@ -264,7 +339,13 @@
     </div>
     <p class="hint">Questi due dati non sono nella zona a lettura ottica, quindi l'estrazione è meno precisa: verificali sempre a mano.</p>
 
-    <video id="videoFront" playsinline autoplay muted></video>
+    <div class="cam-frame" id="frameFront">
+      <video id="videoFront" playsinline autoplay muted></video>
+      <div class="cam-guide" id="guideFront">
+        <div class="card-box" id="cardBoxFront"></div>
+      </div>
+      <div class="cam-caption">Inquadra il fronte dentro il riquadro</div>
+    </div>
     <img id="thumbFront" class="thumb" alt="Foto del fronte della carta">
 
     <div class="btn-row">
@@ -347,15 +428,25 @@
 
 <script>
 const els = {
+  frameMrz: document.getElementById('frameMrz'),
   videoMrz: document.getElementById('videoMrz'),
+  guideMrz: document.getElementById('guideMrz'),
+  cardBoxMrz: document.getElementById('cardBoxMrz'),
+  mrzBandMrz: document.getElementById('mrzBandMrz'),
+  mrzLabelMrz: document.getElementById('mrzLabelMrz'),
   thumbMrz: document.getElementById('thumbMrz'),
+  cropMrz: document.getElementById('cropMrz'),
+  cropMrzLabel: document.getElementById('cropMrzLabel'),
   btnStartMrz: document.getElementById('btnStartMrz'),
   btnShotMrz: document.getElementById('btnShotMrz'),
   btnRetryMrz: document.getElementById('btnRetryMrz'),
   statusMrz: document.getElementById('statusMrz'),
   progMrz: document.getElementById('progMrz'),
 
+  frameFront: document.getElementById('frameFront'),
   videoFront: document.getElementById('videoFront'),
+  guideFront: document.getElementById('guideFront'),
+  cardBoxFront: document.getElementById('cardBoxFront'),
   thumbFront: document.getElementById('thumbFront'),
   btnStartFront: document.getElementById('btnStartFront'),
   btnShotFront: document.getElementById('btnShotFront'),
@@ -373,20 +464,83 @@ let streamMrz = null;
 let streamFront = null;
 let rawLog = "";
 
+// Rapporto carta ID-1 (85.60 x 53.98 mm)
+const CARD_RATIO = 85.60 / 53.98;
+// Quota della fascia MRZ sull'altezza della carta (le 3 righe occupano circa l'ultimo 30%)
+const MRZ_BAND_RATIO = 0.30;
+
 function setStatus(node, text, warn){
   node.textContent = text;
   node.classList.toggle('warn', !!warn);
 }
 
+// ---------- Geometria guida (calcolata sulla dimensione visualizzata del video) ----------
+function computeCardRect(clientW, clientH){
+  let w = clientW * 0.92;
+  let h = w / CARD_RATIO;
+  if(h > clientH * 0.85){
+    h = clientH * 0.85;
+    w = h * CARD_RATIO;
+  }
+  const x = (clientW - w) / 2;
+  const y = (clientH - h) / 2;
+  return { x, y, w, h };
+}
+
+function sizeGuide(videoEl, boxEl, bandEl, labelEl){
+  const clientW = videoEl.clientWidth;
+  const clientH = videoEl.clientHeight;
+  if(!clientW || !clientH) return;
+  const card = computeCardRect(clientW, clientH);
+
+  boxEl.style.left = card.x + 'px';
+  boxEl.style.top = card.y + 'px';
+  boxEl.style.width = card.w + 'px';
+  boxEl.style.height = card.h + 'px';
+
+  if(bandEl){
+    const bandH = card.h * MRZ_BAND_RATIO;
+    const bandY = card.y + card.h - bandH;
+    bandEl.style.left = card.x + 'px';
+    bandEl.style.top = bandY + 'px';
+    bandEl.style.width = card.w + 'px';
+    bandEl.style.height = bandH + 'px';
+    if(labelEl){
+      labelEl.style.left = card.x + 'px';
+      labelEl.style.top = (bandY - 20) + 'px';
+    }
+  }
+}
+
+// Restituisce il rettangolo della carta / fascia MRZ in pixel nativi del video (per il crop)
+function nativeRect(videoEl, withMrzBand){
+  const clientW = videoEl.clientWidth;
+  const clientH = videoEl.clientHeight;
+  const scale = videoEl.videoWidth / clientW;
+  const card = computeCardRect(clientW, clientH);
+
+  let rect = card;
+  if(withMrzBand){
+    const bandH = card.h * MRZ_BAND_RATIO;
+    rect = { x: card.x, y: card.y + card.h - bandH, w: card.w, h: bandH };
+  }
+  return {
+    x: Math.round(rect.x * scale),
+    y: Math.round(rect.y * scale),
+    w: Math.round(rect.w * scale),
+    h: Math.round(rect.h * scale),
+  };
+}
+
 // ---------- Camera helpers ----------
-async function startCamera(videoEl, which){
+async function startCamera(frameEl, videoEl){
   try{
     const stream = await navigator.mediaDevices.getUserMedia({
       video:{ facingMode: { ideal:"environment" }, width:{ ideal:1920 }, height:{ ideal:1080 } },
       audio:false
     });
     videoEl.srcObject = stream;
-    videoEl.classList.add('active');
+    frameEl.classList.add('active');
     return stream;
   }catch(err){
     alert("Impossibile accedere alla fotocamera: " + err.message + "\n\nSu iPhone/Android serve una pagina servita in HTTPS (o localhost).");
@@ -394,42 +548,70 @@ async function startCamera(videoEl, which){
   }
 }
 
-function captureFrame(videoEl){
-  const canvas = document.createElement('canvas');
-  canvas.width = videoEl.videoWidth;
-  canvas.height = videoEl.videoHeight;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-  return canvas;
-}
-
 function stopStream(stream){
   if(stream){ stream.getTracks().forEach(t => t.stop()); }
 }
 
+function fullFrameCanvas(videoEl){
+  const canvas = document.createElement('canvas');
+  canvas.width = videoEl.videoWidth;
+  canvas.height = videoEl.videoHeight;
+  canvas.getContext('2d').drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+// Ritaglia una zona nativa del video, la ingrandisce e la pulisce (scala di grigi + contrasto)
+// per darla all'OCR in condizioni migliori.
+function cropAndEnhance(videoEl, rect, upscale){
+  const canvas = document.createElement('canvas');
+  canvas.width = rect.w * upscale;
+  canvas.height = rect.h * upscale;
+  const ctx = canvas.getContext('2d');
+  ctx.filter = 'grayscale(1) contrast(1.6) brightness(1.05)';
+  ctx.drawImage(videoEl, rect.x, rect.y, rect.w, rect.h, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
 // ---------- MRZ side ----------
+els.videoMrz.addEventListener('loadedmetadata', () => {
+  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzLabelMrz);
+});
+window.addEventListener('resize', () => {
+  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzLabelMrz);
+  sizeGuide(els.videoFront, els.cardBoxFront, null, null);
+});
+
 els.btnStartMrz.addEventListener('click', async () => {
   els.btnStartMrz.disabled = true;
-  streamMrz = await startCamera(els.videoMrz, 'mrz');
+  streamMrz = await startCamera(els.frameMrz, els.videoMrz);
   els.btnShotMrz.disabled = false;
-  setStatus(els.statusMrz, "Fotocamera attiva — inquadra il retro");
+  setStatus(els.statusMrz, "Fotocamera attiva — allinea la carta al riquadro");
 });
 
 els.btnShotMrz.addEventListener('click', async () => {
-  const canvas = captureFrame(els.videoMrz);
-  els.thumbMrz.src = canvas.toDataURL('image/jpeg', 0.92);
+  const full = fullFrameCanvas(els.videoMrz);
+  els.thumbMrz.src = full.toDataURL('image/jpeg', 0.9);
   els.thumbMrz.classList.add('show');
-  els.videoMrz.classList.remove('active');
+
+  const bandRect = nativeRect(els.videoMrz, true);
+  const enhanced = cropAndEnhance(els.videoMrz, bandRect, 3);
+  els.cropMrz.src = enhanced.toDataURL('image/png');
+  els.cropMrz.classList.add('show');
+  els.cropMrzLabel.classList.add('show');
+
+  els.frameMrz.classList.remove('active');
   stopStream(streamMrz);
   els.btnShotMrz.disabled = true;
   els.btnStartMrz.style.display = 'none';
   els.btnRetryMrz.style.display = 'inline-block';
 
-  await runMrzOcr(canvas);
+  await runMrzOcr(enhanced);
 });
 
 els.btnRetryMrz.addEventListener('click', async () => {
   els.thumbMrz.classList.remove('show');
+  els.cropMrz.classList.remove('show');
+  els.cropMrzLabel.classList.remove('show');
   els.btnRetryMrz.style.display = 'none';
   els.btnStartMrz.style.display = 'inline-block';
   els.btnStartMrz.disabled = false;
@@ -448,16 +630,17 @@ async function runMrzOcr(canvas){
           setStatus(els.statusMrz, "Lettura in corso… " + Math.round(m.progress*100) + "%");
         }
       },
-      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
+      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<",
+      tessedit_pageseg_mode: "6"
     });
-    rawLog += "----- RETRO (MRZ) -----\n" + data.text + "\n\n";
+    rawLog += "----- RETRO (MRZ, ritagliata) -----\n" + data.text + "\n\n";
     els.rawText.value = rawLog;
     const mrz = parseMrz(data.text);
     if(mrz){
       fillMrzFields(mrz);
       setStatus(els.statusMrz, "Zona MRZ letta correttamente");
     } else {
-      setStatus(els.statusMrz, "Non ho trovato una zona MRZ valida — inquadra meglio le 3 righe e riprova, oppure compila a mano", true);
+      setStatus(els.statusMrz, "Non ho trovato 3 righe MRZ valide — controlla il ritaglio qui sopra: se il testo è tagliato o storto, rifai la foto allineando meglio", true);
     }
   }catch(err){
     setStatus(els.statusMrz, "Errore OCR: " + err.message, true);
@@ -468,7 +651,6 @@ async function runMrzOcr(canvas){
 
 // ---------- MRZ parsing (ICAO 9303, formato TD1 — 3 righe da 30 caratteri) ----------
 function parseMrz(rawText){
-  // Isola righe candidate: maiuscole/numeri/< , lunghezza vicina a 30
   const candidates = rawText
     .split('\n')
     .map(l => l.replace(/[^A-Z0-9<]/g, ''))
@@ -476,17 +658,14 @@ function parseMrz(rawText){
 
   if(candidates.length < 3) return null;
 
-  // Prendo le ultime 3 righe candidate (di solito le più pulite/lunghe in fondo al blocco)
   const lines = candidates.slice(-3).map(l => (l + '<'.repeat(30)).slice(0, 30));
   const [l1, l2, l3] = lines;
 
-  // Riga 2: nascita(6) check(1) sesso(1) scadenza(6) check(1) nazionalità(3) ...
   const dobRaw = l2.slice(0, 6);
   const sesso = l2.slice(7, 8).replace('<', '');
   const scadRaw = l2.slice(8, 14);
   const nazionalita = l2.slice(15, 18).replace(/</g, '');
 
-  // Riga 3: COGNOME<<NOME<MEDIO
   const namePart = l3.replace(/<+$/, '');
   const [cognomeRaw, nomeRaw] = namePart.split('<<');
 
@@ -495,7 +674,7 @@ function parseMrz(rawText){
     const yy = parseInt(yymmdd.slice(0,2), 10);
     const mm = yymmdd.slice(2,4);
     const dd = yymmdd.slice(4,6);
-    const year = yy > 30 ? 1900 + yy : 2000 + yy; // soglia arbitraria, correggi a mano se serve
+    const year = yy > 30 ? 1900 + yy : 2000 + yy;
     return `${dd}/${mm}/${year}`;
   }
   function cleanName(s){
@@ -526,24 +705,30 @@ function fillMrzFields(mrz){
 }
 
 // ---------- Fronte: luogo di nascita + codice fiscale ----------
+els.videoFront.addEventListener('loadedmetadata', () => {
+  sizeGuide(els.videoFront, els.cardBoxFront, null, null);
+});
+
 els.btnStartFront.addEventListener('click', async () => {
   els.btnStartFront.disabled = true;
-  streamFront = await startCamera(els.videoFront, 'front');
+  streamFront = await startCamera(els.frameFront, els.videoFront);
   els.btnShotFront.disabled = false;
-  setStatus(els.statusFront, "Fotocamera attiva — inquadra il fronte");
+  setStatus(els.statusFront, "Fotocamera attiva — allinea la carta al riquadro");
 });
 
 els.btnShotFront.addEventListener('click', async () => {
-  const canvas = captureFrame(els.videoFront);
-  els.thumbFront.src = canvas.toDataURL('image/jpeg', 0.92);
+  const cardRect = nativeRect(els.videoFront, false);
+  const enhanced = cropAndEnhance(els.videoFront, cardRect, 1.5);
+  els.thumbFront.src = enhanced.toDataURL('image/jpeg', 0.9);
   els.thumbFront.classList.add('show');
-  els.videoFront.classList.remove('active');
+
+  els.frameFront.classList.remove('active');
   stopStream(streamFront);
   els.btnShotFront.disabled = true;
   els.btnStartFront.style.display = 'none';
   els.btnRetryFront.style.display = 'inline-block';
 
-  await runFrontOcr(canvas);
+  await runFrontOcr(enhanced);
 });
 
 els.btnRetryFront.addEventListener('click', async () => {
@@ -567,16 +752,14 @@ async function runFrontOcr(canvas){
         }
       }
     });
-    rawLog += "----- FRONTE -----\n" + data.text + "\n\n";
+    rawLog += "----- FRONTE (ritagliata) -----\n" + data.text + "\n\n";
     els.rawText.value = rawLog;
 
-    // Codice fiscale: pattern classico 16 caratteri alfanumerici
     const cfMatch = data.text.toUpperCase().replace(/\s+/g,'').match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
     if(cfMatch){
       document.getElementById('f-cf').value = cfMatch[0];
     }
 
-    // Luogo di nascita: cerchiamo una riga vicina alla dicitura "nato a / luogo di nascita"
     const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
     let luogo = '';
     for(let i=0;i<lines.length;i++){
