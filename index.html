@@ -92,7 +92,6 @@
     margin:0 0 12px;
   }
 
-  /* --- Camera + overlay guida --- */
   .cam-frame{
     position:relative;
     width:100%;
@@ -123,6 +122,10 @@
     border:2px solid #ffd166;
     background:rgba(255,209,102,0.14);
     border-radius:4px;
+  }
+  .mrz-line-divider{
+    position:absolute;
+    border-top:1px dashed rgba(255,209,102,0.6);
   }
   .mrz-label{
     position:absolute;
@@ -276,7 +279,7 @@
     border-radius:6px;
     padding:8px;
     margin-top:8px;
-    min-height:90px;
+    min-height:110px;
     resize:vertical;
   }
   .api-row{
@@ -298,29 +301,31 @@
   <header>
     <div class="eyebrow">Demo — non salva né invia dati a terzi</div>
     <h1>Lettore Carta d'Identità</h1>
-    <p>Fotografa il retro della carta per leggere automaticamente i dati anagrafici, poi correggi a mano quello che serve prima di inviare.</p>
+    <p>Fotografa il retro della carta per leggere automaticamente i dati anagrafici e il codice fiscale, poi correggi a mano quello che serve prima di inviare.</p>
   </header>
 
-  <!-- STEP 1: RETRO / MRZ -->
+  <!-- STEP 1: RETRO / MRZ + CF -->
   <div class="step">
     <div class="step-head">
       <span class="step-num">1</span>
-      <h2>Retro della carta — dati anagrafici</h2>
+      <h2>Retro della carta — dati anagrafici e codice fiscale</h2>
     </div>
-    <p class="hint">Allinea la carta al riquadro bianco. La fascia gialla in basso deve contenere le 3 righe di testo maiuscolo con i simboli «&lt;»: è l'unica parte che verrà letta.</p>
+    <p class="hint">Allinea la carta al riquadro bianco. La fascia gialla in basso deve contenere le 3 righe di testo maiuscolo con i simboli «&lt;»: viene letta riga per riga, separatamente, per maggiore precisione.</p>
 
     <div class="cam-frame" id="frameMrz">
       <video id="videoMrz" playsinline autoplay muted></video>
       <div class="cam-guide" id="guideMrz">
         <div class="card-box" id="cardBoxMrz"></div>
         <div class="mrz-band" id="mrzBandMrz"></div>
-        <div class="mrz-label" id="mrzLabelMrz">Zona MRZ</div>
+        <div class="mrz-line-divider" id="mrzDiv1"></div>
+        <div class="mrz-line-divider" id="mrzDiv2"></div>
+        <div class="mrz-label" id="mrzLabelMrz">Zona MRZ — 3 righe</div>
       </div>
       <div class="cam-caption">Inquadra il retro dentro il riquadro</div>
     </div>
     <img id="thumbMrz" class="thumb" alt="Foto del retro della carta">
     <img id="cropMrz" class="crop-preview" alt="Fascia MRZ ritagliata">
-    <div class="crop-preview-label" id="cropMrzLabel">Ritaglio inviato all'OCR</div>
+    <div class="crop-preview-label" id="cropMrzLabel">Ritaglio inviato all'OCR (diviso in 3 righe)</div>
 
     <div class="btn-row">
       <button id="btnStartMrz">Attiva fotocamera</button>
@@ -331,13 +336,13 @@
     <div id="statusMrz" class="status">In attesa</div>
   </div>
 
-  <!-- STEP 2: FRONTE / luogo nascita + CF -->
+  <!-- STEP 2: FRONTE / conferma luogo di nascita -->
   <div class="step">
     <div class="step-head">
       <span class="step-num">2</span>
-      <h2>Fronte della carta — luogo di nascita e codice fiscale</h2>
+      <h2>Fronte della carta — luogo di nascita</h2>
     </div>
-    <p class="hint">Questi due dati non sono nella zona a lettura ottica, quindi l'estrazione è meno precisa: verificali sempre a mano.</p>
+    <p class="hint">Il luogo di nascita non fa parte della zona a lettura ottica e si trova solo sul fronte, quindi va letto qui. Verificalo sempre a mano.</p>
 
     <div class="cam-frame" id="frameFront">
       <video id="videoFront" playsinline autoplay muted></video>
@@ -430,9 +435,10 @@
 const els = {
   frameMrz: document.getElementById('frameMrz'),
   videoMrz: document.getElementById('videoMrz'),
-  guideMrz: document.getElementById('guideMrz'),
   cardBoxMrz: document.getElementById('cardBoxMrz'),
   mrzBandMrz: document.getElementById('mrzBandMrz'),
+  mrzDiv1: document.getElementById('mrzDiv1'),
+  mrzDiv2: document.getElementById('mrzDiv2'),
   mrzLabelMrz: document.getElementById('mrzLabelMrz'),
   thumbMrz: document.getElementById('thumbMrz'),
   cropMrz: document.getElementById('cropMrz'),
@@ -445,7 +451,6 @@ const els = {
 
   frameFront: document.getElementById('frameFront'),
   videoFront: document.getElementById('videoFront'),
-  guideFront: document.getElementById('guideFront'),
   cardBoxFront: document.getElementById('cardBoxFront'),
   thumbFront: document.getElementById('thumbFront'),
   btnStartFront: document.getElementById('btnStartFront'),
@@ -464,17 +469,15 @@ let streamMrz = null;
 let streamFront = null;
 let rawLog = "";
 
-// Rapporto carta ID-1 (85.60 x 53.98 mm)
 const CARD_RATIO = 85.60 / 53.98;
-// Quota della fascia MRZ sull'altezza della carta (le 3 righe occupano circa l'ultimo 30%)
-const MRZ_BAND_RATIO = 0.30;
+const MRZ_BAND_RATIO = 0.34; // un po' più alta del minimo per non tagliare la riga dei nomi
 
 function setStatus(node, text, warn){
   node.textContent = text;
   node.classList.toggle('warn', !!warn);
 }
 
-// ---------- Geometria guida (calcolata sulla dimensione visualizzata del video) ----------
+// ---------- Geometria guida ----------
 function computeCardRect(clientW, clientH){
   let w = clientW * 0.92;
   let h = w / CARD_RATIO;
@@ -487,7 +490,7 @@ function computeCardRect(clientW, clientH){
   return { x, y, w, h };
 }
 
-function sizeGuide(videoEl, boxEl, bandEl, labelEl){
+function sizeGuide(videoEl, boxEl, bandEl, div1El, div2El, labelEl){
   const clientW = videoEl.clientWidth;
   const clientH = videoEl.clientHeight;
   if(!clientW || !clientH) return;
@@ -509,10 +512,18 @@ function sizeGuide(videoEl, boxEl, bandEl, labelEl){
       labelEl.style.left = card.x + 'px';
       labelEl.style.top = (bandY - 20) + 'px';
     }
+    if(div1El && div2El){
+      const lineH = bandH / 3;
+      div1El.style.left = card.x + 'px';
+      div1El.style.width = card.w + 'px';
+      div1El.style.top = (bandY + lineH) + 'px';
+      div2El.style.left = card.x + 'px';
+      div2El.style.width = card.w + 'px';
+      div2El.style.top = (bandY + lineH * 2) + 'px';
+    }
   }
 }
 
-// Restituisce il rettangolo della carta / fascia MRZ in pixel nativi del video (per il crop)
 function nativeRect(videoEl, withMrzBand){
   const clientW = videoEl.clientWidth;
   const clientH = videoEl.clientHeight;
@@ -560,25 +571,31 @@ function fullFrameCanvas(videoEl){
   return canvas;
 }
 
-// Ritaglia una zona nativa del video, la ingrandisce e la pulisce (scala di grigi + contrasto)
-// per darla all'OCR in condizioni migliori.
 function cropAndEnhance(videoEl, rect, upscale){
   const canvas = document.createElement('canvas');
-  canvas.width = rect.w * upscale;
-  canvas.height = rect.h * upscale;
+  canvas.width = Math.max(1, Math.round(rect.w * upscale));
+  canvas.height = Math.max(1, Math.round(rect.h * upscale));
   const ctx = canvas.getContext('2d');
   ctx.filter = 'grayscale(1) contrast(1.6) brightness(1.05)';
   ctx.drawImage(videoEl, rect.x, rect.y, rect.w, rect.h, 0, 0, canvas.width, canvas.height);
   return canvas;
 }
 
+function sliceCanvas(sourceCanvas, yStart, height){
+  const canvas = document.createElement('canvas');
+  canvas.width = sourceCanvas.width;
+  canvas.height = height;
+  canvas.getContext('2d').drawImage(sourceCanvas, 0, yStart, sourceCanvas.width, height, 0, 0, sourceCanvas.width, height);
+  return canvas;
+}
+
 // ---------- MRZ side ----------
 els.videoMrz.addEventListener('loadedmetadata', () => {
-  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzLabelMrz);
+  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzDiv1, els.mrzDiv2, els.mrzLabelMrz);
 });
 window.addEventListener('resize', () => {
-  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzLabelMrz);
-  sizeGuide(els.videoFront, els.cardBoxFront, null, null);
+  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzDiv1, els.mrzDiv2, els.mrzLabelMrz);
+  sizeGuide(els.videoFront, els.cardBoxFront, null, null, null, null);
 });
 
 els.btnStartMrz.addEventListener('click', async () => {
@@ -594,10 +611,13 @@ els.btnShotMrz.addEventListener('click', async () => {
   els.thumbMrz.classList.add('show');
 
   const bandRect = nativeRect(els.videoMrz, true);
-  const enhanced = cropAndEnhance(els.videoMrz, bandRect, 3);
-  els.cropMrz.src = enhanced.toDataURL('image/png');
+  const bandEnhanced = cropAndEnhance(els.videoMrz, bandRect, 3);
+  els.cropMrz.src = bandEnhanced.toDataURL('image/png');
   els.cropMrz.classList.add('show');
   els.cropMrzLabel.classList.add('show');
+
+  const cardRect = nativeRect(els.videoMrz, false);
+  const cardEnhanced = cropAndEnhance(els.videoMrz, cardRect, 1.8);
 
   els.frameMrz.classList.remove('active');
   stopStream(streamMrz);
@@ -605,7 +625,7 @@ els.btnShotMrz.addEventListener('click', async () => {
   els.btnStartMrz.style.display = 'none';
   els.btnRetryMrz.style.display = 'inline-block';
 
-  await runMrzOcr(enhanced);
+  await runRetroOcr(bandEnhanced, cardEnhanced);
 });
 
 els.btnRetryMrz.addEventListener('click', async () => {
@@ -618,47 +638,66 @@ els.btnRetryMrz.addEventListener('click', async () => {
   setStatus(els.statusMrz, "In attesa");
 });
 
-async function runMrzOcr(canvas){
+async function runRetroOcr(bandCanvas, cardCanvas){
   els.progMrz.classList.add('show');
-  setStatus(els.statusMrz, "Lettura in corso…");
+  els.progMrz.max = 1;
+
+  // --- 1) MRZ, riga per riga (3 letture separate: molto più precise di una lettura a blocco) ---
+  const lineH = bandCanvas.height / 3;
+  const lineTexts = [];
+  for(let i = 0; i < 3; i++){
+    setStatus(els.statusMrz, `Lettura riga ${i+1} di 3…`);
+    const lineCanvas = sliceCanvas(bandCanvas, Math.round(i*lineH), Math.round(lineH));
+    try{
+      const { data } = await Tesseract.recognize(lineCanvas, 'eng', {
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<",
+        tessedit_pageseg_mode: "7" // singola riga di testo
+      });
+      lineTexts.push(data.text.replace(/[^A-Z0-9<]/g, ''));
+    }catch(err){
+      lineTexts.push('');
+    }
+  }
+  rawLog += "----- RETRO — MRZ riga per riga -----\n" + lineTexts.join('\n') + "\n\n";
+
+  const mrz = parseMrzLines(lineTexts);
+  if(mrz){
+    fillMrzFields(mrz);
+    setStatus(els.statusMrz, "Zona MRZ letta — ora cerco il codice fiscale…");
+  } else {
+    setStatus(els.statusMrz, "MRZ non completa — controlla il ritaglio qui sopra e valuta di rifare la foto", true);
+  }
+
+  // --- 2) Codice fiscale: cerco sull'intero retro (è stampato vicino al codice a barre, fuori dalla MRZ) ---
+  els.progMrz.value = 0.7;
+  setStatus(els.statusMrz, "Cerco il codice fiscale sul retro…");
   try{
-    const { data } = await Tesseract.recognize(canvas, 'eng', {
-      logger: m => {
-        if(m.status === 'recognizing text'){
-          els.progMrz.value = m.progress;
-          els.progMrz.max = 1;
-          setStatus(els.statusMrz, "Lettura in corso… " + Math.round(m.progress*100) + "%");
-        }
-      },
-      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<",
-      tessedit_pageseg_mode: "6"
+    const { data } = await Tesseract.recognize(cardCanvas, 'eng', {
+      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     });
-    rawLog += "----- RETRO (MRZ, ritagliata) -----\n" + data.text + "\n\n";
+    rawLog += "----- RETRO — intera carta (ricerca CF) -----\n" + data.text + "\n\n";
     els.rawText.value = rawLog;
-    const mrz = parseMrz(data.text);
-    if(mrz){
-      fillMrzFields(mrz);
-      setStatus(els.statusMrz, "Zona MRZ letta correttamente");
+
+    const cfMatch = data.text.toUpperCase().replace(/\s+/g,'').match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
+    if(cfMatch){
+      document.getElementById('f-cf').value = cfMatch[0];
+      document.getElementById('flag-cf').textContent = 'RETRO';
+      document.getElementById('flag-cf').classList.remove('check');
+      setStatus(els.statusMrz, mrz ? "MRZ e codice fiscale letti correttamente" : "Codice fiscale trovato — verifica manualmente gli altri campi", false);
     } else {
-      setStatus(els.statusMrz, "Non ho trovato 3 righe MRZ valide — controlla il ritaglio qui sopra: se il testo è tagliato o storto, rifai la foto allineando meglio", true);
+      setStatus(els.statusMrz, mrz ? "MRZ letta correttamente — codice fiscale non individuato, inseriscilo a mano" : "Lettura incompleta — verifica e completa i campi a mano", true);
     }
   }catch(err){
-    setStatus(els.statusMrz, "Errore OCR: " + err.message, true);
+    els.rawText.value = rawLog;
+    setStatus(els.statusMrz, "MRZ letta, ma la ricerca del codice fiscale è fallita: " + err.message, true);
   }finally{
     els.progMrz.classList.remove('show');
   }
 }
 
-// ---------- MRZ parsing (ICAO 9303, formato TD1 — 3 righe da 30 caratteri) ----------
-function parseMrz(rawText){
-  const candidates = rawText
-    .split('\n')
-    .map(l => l.replace(/[^A-Z0-9<]/g, ''))
-    .filter(l => l.length >= 20 && (l.match(/</g) || []).length >= 1);
-
-  if(candidates.length < 3) return null;
-
-  const lines = candidates.slice(-3).map(l => (l + '<'.repeat(30)).slice(0, 30));
+// ---------- MRZ parsing (ICAO 9303, TD1 — 3 righe già separate da 30 caratteri) ----------
+function parseMrzLines(lineTexts){
+  const lines = lineTexts.map(l => (l + '<'.repeat(30)).slice(0, 30));
   const [l1, l2, l3] = lines;
 
   const dobRaw = l2.slice(0, 6);
@@ -667,7 +706,9 @@ function parseMrz(rawText){
   const nazionalita = l2.slice(15, 18).replace(/</g, '');
 
   const namePart = l3.replace(/<+$/, '');
-  const [cognomeRaw, nomeRaw] = namePart.split('<<');
+  const parts = namePart.split('<<');
+  const cognomeRaw = parts[0] || '';
+  const nomeRaw = parts[1] || '';
 
   function toDate(yymmdd){
     if(!/^\d{6}$/.test(yymmdd)) return '';
@@ -683,30 +724,32 @@ function parseMrz(rawText){
 
   const cognome = cleanName(cognomeRaw);
   const nome = cleanName(nomeRaw);
+  const dataNascita = toDate(dobRaw);
+  const scadenza = toDate(scadRaw);
 
-  if(!cognome && !nome && !dobRaw.match(/\d{6}/)) return null;
+  if(!cognome && !nome && !dataNascita && !scadenza) return null;
 
   return {
     cognome, nome,
-    dataNascita: toDate(dobRaw),
+    dataNascita,
     sesso: sesso === 'M' || sesso === 'F' ? sesso : '',
     cittadinanza: nazionalita,
-    scadenza: toDate(scadRaw),
+    scadenza,
   };
 }
 
 function fillMrzFields(mrz){
-  document.getElementById('f-cognome').value = mrz.cognome;
-  document.getElementById('f-nome').value = mrz.nome;
-  document.getElementById('f-dob').value = mrz.dataNascita;
-  document.getElementById('f-sesso').value = mrz.sesso;
-  document.getElementById('f-citt').value = mrz.cittadinanza;
-  document.getElementById('f-scad').value = mrz.scadenza;
+  if(mrz.cognome) document.getElementById('f-cognome').value = mrz.cognome;
+  if(mrz.nome) document.getElementById('f-nome').value = mrz.nome;
+  if(mrz.dataNascita) document.getElementById('f-dob').value = mrz.dataNascita;
+  if(mrz.sesso) document.getElementById('f-sesso').value = mrz.sesso;
+  if(mrz.cittadinanza) document.getElementById('f-citt').value = mrz.cittadinanza;
+  if(mrz.scadenza) document.getElementById('f-scad').value = mrz.scadenza;
 }
 
-// ---------- Fronte: luogo di nascita + codice fiscale ----------
+// ---------- Fronte: luogo di nascita ----------
 els.videoFront.addEventListener('loadedmetadata', () => {
-  sizeGuide(els.videoFront, els.cardBoxFront, null, null);
+  sizeGuide(els.videoFront, els.cardBoxFront, null, null, null, null);
 });
 
 els.btnStartFront.addEventListener('click', async () => {
@@ -718,7 +761,7 @@ els.btnStartFront.addEventListener('click', async () => {
 
 els.btnShotFront.addEventListener('click', async () => {
   const cardRect = nativeRect(els.videoFront, false);
-  const enhanced = cropAndEnhance(els.videoFront, cardRect, 1.5);
+  const enhanced = cropAndEnhance(els.videoFront, cardRect, 1.8);
   els.thumbFront.src = enhanced.toDataURL('image/jpeg', 0.9);
   els.thumbFront.classList.add('show');
 
@@ -752,25 +795,23 @@ async function runFrontOcr(canvas){
         }
       }
     });
-    rawLog += "----- FRONTE (ritagliata) -----\n" + data.text + "\n\n";
+    rawLog += "----- FRONTE (ricerca luogo di nascita) -----\n" + data.text + "\n\n";
     els.rawText.value = rawLog;
-
-    const cfMatch = data.text.toUpperCase().replace(/\s+/g,'').match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
-    if(cfMatch){
-      document.getElementById('f-cf').value = cfMatch[0];
-    }
 
     const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
     let luogo = '';
     for(let i=0;i<lines.length;i++){
-      if(/luogo di nascita|nato a|nata a/i.test(lines[i])){
-        luogo = (lines[i].split(/luogo di nascita|nato a|nata a/i)[1] || lines[i+1] || '').trim();
+      if(/luogo\s*e?\s*data\s*di\s*nascita|luogo di nascita|nato a|nata a/i.test(lines[i])){
+        luogo = (lines[i].split(/luogo\s*e?\s*data\s*di\s*nascita|luogo di nascita|nato a|nata a/i)[1] || lines[i+1] || '').trim();
         break;
       }
     }
-    if(luogo) document.getElementById('f-luogo').value = luogo.replace(/[^A-Za-zÀ-ÿ' ]/g, '').trim();
-
-    setStatus(els.statusFront, cfMatch ? "Codice fiscale individuato — verifica gli altri campi a mano" : "Lettura completata — verifica i campi a mano, il fronte è meno affidabile");
+    if(luogo){
+      document.getElementById('f-luogo').value = luogo.replace(/[^A-Za-zÀ-ÿ' ]/g, '').trim();
+      setStatus(els.statusFront, "Luogo di nascita individuato — verifica comunque a mano");
+    } else {
+      setStatus(els.statusFront, "Non ho trovato automaticamente il luogo di nascita — inseriscilo a mano guardando la foto qui sopra", true);
+    }
   }catch(err){
     setStatus(els.statusFront, "Errore OCR: " + err.message, true);
   }finally{
