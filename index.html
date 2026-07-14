@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Lettore Carta d'Identità — Demo</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <style>
   :root{
     --ink:#101820;
@@ -310,7 +311,7 @@
       <span class="step-num">1</span>
       <h2>Retro della carta — dati anagrafici e codice fiscale</h2>
     </div>
-    <p class="hint">Allinea la carta al riquadro bianco. La fascia gialla in basso deve contenere le 3 righe di testo maiuscolo con i simboli «&lt;»: viene letta riga per riga, separatamente, per maggiore precisione.</p>
+    <p class="hint">Allinea la carta al riquadro bianco. La fascia gialla in basso deve contenere le 3 righe di testo maiuscolo con i simboli «&lt;»: viene letta riga per riga con un modello OCR dedicato alla MRZ. Il codice fiscale viene letto dal codice a barre.</p>
 
     <div class="cam-frame" id="frameMrz">
       <video id="videoMrz" playsinline autoplay muted></video>
@@ -428,7 +429,7 @@
     <div id="statusSend" class="status"></div>
   </div>
 
-  <footer>Elaborazione OCR interamente nel browser · nessun dato lascia il dispositivo finché non premi "Invia"</footer>
+  <footer>Elaborazione OCR/barcode interamente nel browser · nessun dato lascia il dispositivo finché non premi "Invia"</footer>
 </div>
 
 <script>
@@ -468,13 +469,32 @@ const els = {
 let streamMrz = null;
 let streamFront = null;
 let rawLog = "";
+let mrzWorkerPromise = null;
 
 const CARD_RATIO = 85.60 / 53.98;
-const MRZ_BAND_RATIO = 0.34; // un po' più alta del minimo per non tagliare la riga dei nomi
+const MRZ_BAND_RATIO = 0.34;
+// Repository con un modello Tesseract addestrato sul font OCR-B (quello usato nelle zone MRZ),
+// molto più affidabile del modello inglese generico per riconoscere lettere e simboli "<".
+const OCRB_LANG_PATH = "https://raw.githubusercontent.com/DaanVanVugt/tesseract-mrz/master/lang";
 
 function setStatus(node, text, warn){
   node.textContent = text;
   node.classList.toggle('warn', !!warn);
+}
+
+// ---------- Worker OCR-B (riusato per tutte le righe MRZ) ----------
+async function getMrzWorker(){
+  if(!mrzWorkerPromise){
+    mrzWorkerPromise = (async () => {
+      const worker = await Tesseract.createWorker('OCRB', 1, { langPath: OCRB_LANG_PATH });
+      await worker.setParameters({
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<",
+        tessedit_pageseg_mode: "7" // singola riga di testo
+      });
+      return worker;
+    })();
+  }
+  return mrzWorkerPromise;
 }
 
 // ---------- Geometria guida ----------
@@ -589,6 +609,27 @@ function sliceCanvas(sourceCanvas, yStart, height){
   return canvas;
 }
 
+// ---------- Lettura codice a barre (Code 39, tipico del codice fiscale sulla CIE) ----------
+async function tryBarcodeCf(canvas){
+  try{
+    const dataUrl = canvas.toDataURL('image/png');
+    const img = new Image();
+    img.src = dataUrl;
+    await img.decode();
+
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.CODE_128
+    ]);
+    const reader = new ZXing.BrowserMultiFormatReader(hints);
+    const result = await reader.decodeFromImageElement(img);
+    return (result.getText() || '').toUpperCase().trim();
+  }catch(err){
+    return null; // nessun barcode trovato — normale se l'inquadratura non lo comprende
+  }
+}
+
 // ---------- MRZ side ----------
 els.videoMrz.addEventListener('loadedmetadata', () => {
   sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzDiv1, els.mrzDiv2, els.mrzLabelMrz);
@@ -616,16 +657,13 @@ els.btnShotMrz.addEventListener('click', async () => {
   els.cropMrz.classList.add('show');
   els.cropMrzLabel.classList.add('show');
 
-  const cardRect = nativeRect(els.videoMrz, false);
-  const cardEnhanced = cropAndEnhance(els.videoMrz, cardRect, 1.8);
-
   els.frameMrz.classList.remove('active');
   stopStream(streamMrz);
   els.btnShotMrz.disabled = true;
   els.btnStartMrz.style.display = 'none';
   els.btnRetryMrz.style.display = 'inline-block';
 
-  await runRetroOcr(bandEnhanced, cardEnhanced);
+  await runRetroOcr(bandEnhanced, full);
 });
 
 els.btnRetryMrz.addEventListener('click', async () => {
@@ -638,77 +676,95 @@ els.btnRetryMrz.addEventListener('click', async () => {
   setStatus(els.statusMrz, "In attesa");
 });
 
-async function runRetroOcr(bandCanvas, cardCanvas){
+async function runRetroOcr(bandCanvas, fullCanvas){
   els.progMrz.classList.add('show');
   els.progMrz.max = 1;
 
-  // --- 1) MRZ, riga per riga (3 letture separate: molto più precise di una lettura a blocco) ---
+  // --- 1) Codice fiscale dal codice a barre (parte in parallelo, è indipendente dalla MRZ) ---
+  setStatus(els.statusMrz, "Cerco il codice a barre del codice fiscale…");
+  els.progMrz.value = 0.1;
+  const barcodeText = await tryBarcodeCf(fullCanvas);
+  rawLog += "----- RETRO — tentativo lettura codice a barre -----\n" + (barcodeText || '(nessun barcode trovato)') + "\n\n";
+
+  const cfFromBarcode = barcodeText && barcodeText.match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
+  const cfFlag = document.getElementById('flag-cf');
+  if(cfFromBarcode){
+    document.getElementById('f-cf').value = cfFromBarcode[0];
+    cfFlag.textContent = 'CODICE A BARRE';
+    cfFlag.classList.remove('check');
+  }
+
+  // --- 2) MRZ, riga per riga, con il modello OCR-B dedicato ---
+  const worker = await getMrzWorker();
   const lineH = bandCanvas.height / 3;
   const lineTexts = [];
   for(let i = 0; i < 3; i++){
-    setStatus(els.statusMrz, `Lettura riga ${i+1} di 3…`);
+    setStatus(els.statusMrz, `Lettura MRZ — riga ${i+1} di 3…`);
+    els.progMrz.value = 0.2 + i * 0.2;
     const lineCanvas = sliceCanvas(bandCanvas, Math.round(i*lineH), Math.round(lineH));
     try{
-      const { data } = await Tesseract.recognize(lineCanvas, 'eng', {
-        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<",
-        tessedit_pageseg_mode: "7" // singola riga di testo
-      });
+      const { data } = await worker.recognize(lineCanvas);
       lineTexts.push(data.text.replace(/[^A-Z0-9<]/g, ''));
     }catch(err){
       lineTexts.push('');
     }
   }
-  rawLog += "----- RETRO — MRZ riga per riga -----\n" + lineTexts.join('\n') + "\n\n";
+  rawLog += "----- RETRO — MRZ riga per riga (modello OCR-B) -----\n" + lineTexts.join('\n') + "\n\n";
+  els.rawText.value = rawLog;
 
   const mrz = parseMrzLines(lineTexts);
   if(mrz){
     fillMrzFields(mrz);
-    setStatus(els.statusMrz, "Zona MRZ letta — ora cerco il codice fiscale…");
+  }
+
+  // --- 3) Se il barcode non ha dato nulla, provo comunque a cercare il CF via OCR sull'intera carta ---
+  if(!cfFromBarcode){
+    setStatus(els.statusMrz, "Barcode non trovato — provo a leggere il codice fiscale via OCR…");
+    els.progMrz.value = 0.9;
+    try{
+      const cardEnhanced = cropAndEnhance(els.videoMrz.videoWidth ? els.videoMrz : els.videoMrz, nativeRect(els.videoMrz, false), 1.8);
+      const { data } = await Tesseract.recognize(cardEnhanced, 'eng', {
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+      });
+      rawLog += "----- RETRO — intera carta (ricerca CF via OCR, fallback) -----\n" + data.text + "\n\n";
+      els.rawText.value = rawLog;
+      const cfMatch = data.text.toUpperCase().replace(/\s+/g,'').match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
+      if(cfMatch){
+        document.getElementById('f-cf').value = cfMatch[0];
+        cfFlag.textContent = 'RETRO (OCR)';
+        cfFlag.classList.remove('check');
+      }
+    }catch(err){ /* fallback silenzioso, il campo resta da compilare a mano */ }
+  }
+
+  const cfFilled = document.getElementById('f-cf').value.length > 0;
+  if(mrz && cfFilled){
+    setStatus(els.statusMrz, "MRZ e codice fiscale letti correttamente");
+  } else if(mrz){
+    setStatus(els.statusMrz, "MRZ letta — codice fiscale non trovato, inseriscilo a mano", true);
+  } else if(cfFilled){
+    setStatus(els.statusMrz, "Codice fiscale trovato — MRZ incompleta, verifica gli altri campi a mano", true);
   } else {
-    setStatus(els.statusMrz, "MRZ non completa — controlla il ritaglio qui sopra e valuta di rifare la foto", true);
+    setStatus(els.statusMrz, "Lettura incompleta — controlla il ritaglio qui sopra e valuta di rifare la foto", true);
   }
-
-  // --- 2) Codice fiscale: cerco sull'intero retro (è stampato vicino al codice a barre, fuori dalla MRZ) ---
-  els.progMrz.value = 0.7;
-  setStatus(els.statusMrz, "Cerco il codice fiscale sul retro…");
-  try{
-    const { data } = await Tesseract.recognize(cardCanvas, 'eng', {
-      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    });
-    rawLog += "----- RETRO — intera carta (ricerca CF) -----\n" + data.text + "\n\n";
-    els.rawText.value = rawLog;
-
-    const cfMatch = data.text.toUpperCase().replace(/\s+/g,'').match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
-    if(cfMatch){
-      document.getElementById('f-cf').value = cfMatch[0];
-      document.getElementById('flag-cf').textContent = 'RETRO';
-      document.getElementById('flag-cf').classList.remove('check');
-      setStatus(els.statusMrz, mrz ? "MRZ e codice fiscale letti correttamente" : "Codice fiscale trovato — verifica manualmente gli altri campi", false);
-    } else {
-      setStatus(els.statusMrz, mrz ? "MRZ letta correttamente — codice fiscale non individuato, inseriscilo a mano" : "Lettura incompleta — verifica e completa i campi a mano", true);
-    }
-  }catch(err){
-    els.rawText.value = rawLog;
-    setStatus(els.statusMrz, "MRZ letta, ma la ricerca del codice fiscale è fallita: " + err.message, true);
-  }finally{
-    els.progMrz.classList.remove('show');
-  }
+  els.progMrz.classList.remove('show');
 }
 
 // ---------- MRZ parsing (ICAO 9303, TD1 — 3 righe già separate da 30 caratteri) ----------
 function parseMrzLines(lineTexts){
   const lines = lineTexts.map(l => (l + '<'.repeat(30)).slice(0, 30));
-  const [l1, l2, l3] = lines;
+  const [l1, l2, l3raw] = lines;
 
   const dobRaw = l2.slice(0, 6);
   const sesso = l2.slice(7, 8).replace('<', '');
   const scadRaw = l2.slice(8, 14);
   const nazionalita = l2.slice(15, 18).replace(/</g, '');
 
+  // Nella riga dei nomi non possono comparire cifre: qualunque cifra letta è quasi certamente
+  // un carattere '<' mal riconosciuto, quindi la normalizziamo prima di separare cognome/nome.
+  const l3 = l3raw.replace(/[0-9]/g, '<');
   const namePart = l3.replace(/<+$/, '');
-  const parts = namePart.split('<<');
-  const cognomeRaw = parts[0] || '';
-  const nomeRaw = parts[1] || '';
+  const [cognomeRaw, nomeRaw] = splitSurnameGiven(namePart);
 
   function toDate(yymmdd){
     if(!/^\d{6}$/.test(yymmdd)) return '';
@@ -736,6 +792,19 @@ function parseMrzLines(lineTexts){
     cittadinanza: nazionalita,
     scadenza,
   };
+}
+
+// Individua il separatore cognome/nome cercando la sequenza più lunga di '<' consecutivi:
+// è più robusto della ricerca letterale di "<<", perché tollera letture imperfette
+// (es. un solo '<' invece di due, o viceversa).
+function splitSurnameGiven(namePart){
+  const runs = [...namePart.matchAll(/<+/g)];
+  if(runs.length === 0) return [namePart, ''];
+  let best = runs[0];
+  for(const r of runs){ if(r[0].length > best[0].length) best = r; }
+  const idx = best.index;
+  const len = best[0].length;
+  return [namePart.slice(0, idx), namePart.slice(idx + len)];
 }
 
 function fillMrzFields(mrz){
