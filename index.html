@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Lettore Carta d'Identità — Demo</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<style>
+  :root{
+    --ink:#101820;
+    --paper:#f5f3ee;
+    --panel:#ffffff;
+    --line:#d8d4c8;
+    --accent:#1f5f5b;
+    --accent-soft:#e4efed;
+    --warn:#a8551e;
+    --warn-soft:#f5e7db;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--sans);
+    line-height:1.45;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .wrap{
+    max-width:640px;
+    margin:0 auto;
+    padding:20px 16px 80px;
+  }
+  header{
+    padding:6px 0 18px;
+    border-bottom:2px solid var(--ink);
+    margin-bottom:20px;
+  }
+  header .eyebrow{
+    font-family:var(--mono);
+    font-size:12px;
+    letter-spacing:0.08em;
+    text-transform:uppercase;
+    color:var(--accent);
+  }
+  header h1{
+    font-size:22px;
+    margin:4px 0 6px;
+    letter-spacing:-0.01em;
+  }
+  header p{
+    margin:0;
+    font-size:14px;
+    color:#54524a;
+    max-width:52ch;
+  }
+  .step{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:16px;
+    margin-bottom:16px;
+  }
+  .step-head{
+    display:flex;
+    align-items:baseline;
+    gap:10px;
+    margin-bottom:10px;
+  }
+  .step-num{
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--accent);
+    border:1px solid var(--accent);
+    border-radius:999px;
+    width:20px;
+    height:20px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-shrink:0;
+  }
+  .step-head h2{
+    font-size:15px;
+    margin:0;
+    font-weight:600;
+  }
+  .step p.hint{
+    font-size:13px;
+    color:#6b6a61;
+    margin:0 0 12px;
+  }
+  video, canvas.preview{
+    width:100%;
+    border-radius:8px;
+    background:#000;
+    display:block;
+  }
+  video{ display:none; }
+  video.active{ display:block; }
+  .thumb{
+    width:100%;
+    border-radius:8px;
+    display:none;
+    border:1px solid var(--line);
+  }
+  .thumb.show{ display:block; }
+  .btn-row{
+    display:flex;
+    gap:8px;
+    margin-top:10px;
+    flex-wrap:wrap;
+  }
+  button{
+    font-family:var(--sans);
+    font-size:14px;
+    font-weight:600;
+    border-radius:7px;
+    padding:10px 16px;
+    border:1px solid var(--ink);
+    background:var(--ink);
+    color:var(--paper);
+    cursor:pointer;
+  }
+  button.secondary{
+    background:transparent;
+    color:var(--ink);
+    border:1px solid var(--line);
+  }
+  button:disabled{
+    opacity:0.4;
+    cursor:not-allowed;
+  }
+  button:focus-visible, input:focus-visible, textarea:focus-visible{
+    outline:2px solid var(--accent);
+    outline-offset:2px;
+  }
+  .status{
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--accent);
+    margin-top:10px;
+    min-height:16px;
+  }
+  .status.warn{ color:var(--warn); }
+  progress{
+    width:100%;
+    height:6px;
+    margin-top:8px;
+    accent-color:var(--accent);
+    display:none;
+  }
+  progress.show{ display:block; }
+
+  .field{
+    margin-bottom:12px;
+  }
+  .field label{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    font-size:12px;
+    font-weight:600;
+    text-transform:uppercase;
+    letter-spacing:0.03em;
+    color:#54524a;
+    margin-bottom:5px;
+  }
+  .field label .flag{
+    font-family:var(--mono);
+    font-size:10px;
+    text-transform:none;
+    letter-spacing:0;
+    padding:1px 6px;
+    border-radius:4px;
+    background:var(--accent-soft);
+    color:var(--accent);
+  }
+  .field label .flag.check{
+    background:var(--warn-soft);
+    color:var(--warn);
+  }
+  .field input{
+    width:100%;
+    font-family:var(--mono);
+    font-size:15px;
+    padding:9px 10px;
+    border-radius:6px;
+    border:1px solid var(--line);
+    background:#fcfbf8;
+  }
+  details{
+    margin-top:14px;
+    border-top:1px solid var(--line);
+    padding-top:10px;
+  }
+  summary{
+    font-size:12px;
+    color:#6b6a61;
+    cursor:pointer;
+    font-family:var(--mono);
+  }
+  textarea{
+    width:100%;
+    font-family:var(--mono);
+    font-size:11px;
+    color:#6b6a61;
+    background:#fcfbf8;
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:8px;
+    margin-top:8px;
+    min-height:90px;
+    resize:vertical;
+  }
+  .api-row{
+    display:flex;
+    gap:8px;
+  }
+  .api-row input{ flex:1; }
+  footer{
+    text-align:center;
+    font-size:12px;
+    color:#a19f95;
+    margin-top:24px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Demo — non salva né invia dati a terzi</div>
+    <h1>Lettore Carta d'Identità</h1>
+    <p>Fotografa il retro della carta per leggere automaticamente i dati anagrafici, poi correggi a mano quello che serve prima di inviare.</p>
+  </header>
+
+  <!-- STEP 1: RETRO / MRZ -->
+  <div class="step">
+    <div class="step-head">
+      <span class="step-num">1</span>
+      <h2>Retro della carta — dati anagrafici</h2>
+    </div>
+    <p class="hint">Inquadra le 3 righe di testo maiuscolo con i simboli «&lt;» in basso al retro. Tienila ferma, buona luce, niente riflessi.</p>
+
+    <video id="videoMrz" playsinline autoplay muted></video>
+    <img id="thumbMrz" class="thumb" alt="Foto del retro della carta">
+
+    <div class="btn-row">
+      <button id="btnStartMrz">Attiva fotocamera</button>
+      <button id="btnShotMrz" class="secondary" disabled>Scatta</button>
+      <button id="btnRetryMrz" class="secondary" style="display:none">Rifai foto</button>
+    </div>
+    <progress id="progMrz"></progress>
+    <div id="statusMrz" class="status">In attesa</div>
+  </div>
+
+  <!-- STEP 2: FRONTE / luogo nascita + CF -->
+  <div class="step">
+    <div class="step-head">
+      <span class="step-num">2</span>
+      <h2>Fronte della carta — luogo di nascita e codice fiscale</h2>
+    </div>
+    <p class="hint">Questi due dati non sono nella zona a lettura ottica, quindi l'estrazione è meno precisa: verificali sempre a mano.</p>
+
+    <video id="videoFront" playsinline autoplay muted></video>
+    <img id="thumbFront" class="thumb" alt="Foto del fronte della carta">
+
+    <div class="btn-row">
+      <button id="btnStartFront">Attiva fotocamera</button>
+      <button id="btnShotFront" class="secondary" disabled>Scatta</button>
+      <button id="btnRetryFront" class="secondary" style="display:none">Rifai foto</button>
+    </div>
+    <progress id="progFront"></progress>
+    <div id="statusFront" class="status">In attesa</div>
+  </div>
+
+  <!-- STEP 3: RISULTATI -->
+  <div class="step">
+    <div class="step-head">
+      <span class="step-num">3</span>
+      <h2>Dati estratti</h2>
+    </div>
+    <p class="hint">Campi precompilati dalla lettura automatica. Controllali prima di inviare.</p>
+
+    <div class="field">
+      <label>Cognome <span class="flag" id="flag-cognome">MRZ</span></label>
+      <input id="f-cognome" type="text">
+    </div>
+    <div class="field">
+      <label>Nome <span class="flag" id="flag-nome">MRZ</span></label>
+      <input id="f-nome" type="text">
+    </div>
+    <div class="field">
+      <label>Data di nascita <span class="flag" id="flag-dob">MRZ</span></label>
+      <input id="f-dob" type="text" placeholder="GG/MM/AAAA">
+    </div>
+    <div class="field">
+      <label>Sesso <span class="flag" id="flag-sesso">MRZ</span></label>
+      <input id="f-sesso" type="text" maxlength="1">
+    </div>
+    <div class="field">
+      <label>Cittadinanza <span class="flag" id="flag-citt">MRZ</span></label>
+      <input id="f-citt" type="text">
+    </div>
+    <div class="field">
+      <label>Scadenza carta <span class="flag" id="flag-scad">MRZ</span></label>
+      <input id="f-scad" type="text" placeholder="GG/MM/AAAA">
+    </div>
+    <div class="field">
+      <label>Luogo di nascita <span class="flag check" id="flag-luogo">DA VERIFICARE</span></label>
+      <input id="f-luogo" type="text">
+    </div>
+    <div class="field">
+      <label>Codice fiscale <span class="flag check" id="flag-cf">DA VERIFICARE</span></label>
+      <input id="f-cf" type="text" maxlength="16">
+    </div>
+
+    <details>
+      <summary>Testo grezzo OCR (debug)</summary>
+      <textarea id="rawText" readonly></textarea>
+    </details>
+  </div>
+
+  <!-- STEP 4: INVIO -->
+  <div class="step">
+    <div class="step-head">
+      <span class="step-num">4</span>
+      <h2>Invio alla piattaforma esterna</h2>
+    </div>
+    <p class="hint">Inserisci l'endpoint REST di destinazione. In una versione reale questa chiamata andrebbe fatta da un backend, non dal browser, per non esporre eventuali chiavi API.</p>
+    <div class="field">
+      <label>URL API</label>
+      <div class="api-row">
+        <input id="apiUrl" type="text" placeholder="https://tuo-endpoint.example.com/api/persone">
+      </div>
+    </div>
+    <div class="btn-row">
+      <button id="btnSend">Invia dati</button>
+    </div>
+    <div id="statusSend" class="status"></div>
+  </div>
+
+  <footer>Elaborazione OCR interamente nel browser · nessun dato lascia il dispositivo finché non premi "Invia"</footer>
+</div>
+
+<script>
+const els = {
+  videoMrz: document.getElementById('videoMrz'),
+  thumbMrz: document.getElementById('thumbMrz'),
+  btnStartMrz: document.getElementById('btnStartMrz'),
+  btnShotMrz: document.getElementById('btnShotMrz'),
+  btnRetryMrz: document.getElementById('btnRetryMrz'),
+  statusMrz: document.getElementById('statusMrz'),
+  progMrz: document.getElementById('progMrz'),
+
+  videoFront: document.getElementById('videoFront'),
+  thumbFront: document.getElementById('thumbFront'),
+  btnStartFront: document.getElementById('btnStartFront'),
+  btnShotFront: document.getElementById('btnShotFront'),
+  btnRetryFront: document.getElementById('btnRetryFront'),
+  statusFront: document.getElementById('statusFront'),
+  progFront: document.getElementById('progFront'),
+
+  rawText: document.getElementById('rawText'),
+  btnSend: document.getElementById('btnSend'),
+  apiUrl: document.getElementById('apiUrl'),
+  statusSend: document.getElementById('statusSend'),
+};
+
+let streamMrz = null;
+let streamFront = null;
+let rawLog = "";
+
+function setStatus(node, text, warn){
+  node.textContent = text;
+  node.classList.toggle('warn', !!warn);
+}
+
+// ---------- Camera helpers ----------
+async function startCamera(videoEl, which){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode: { ideal:"environment" }, width:{ ideal:1920 }, height:{ ideal:1080 } },
+      audio:false
+    });
+    videoEl.srcObject = stream;
+    videoEl.classList.add('active');
+    return stream;
+  }catch(err){
+    alert("Impossibile accedere alla fotocamera: " + err.message + "\n\nSu iPhone/Android serve una pagina servita in HTTPS (o localhost).");
+    throw err;
+  }
+}
+
+function captureFrame(videoEl){
+  const canvas = document.createElement('canvas');
+  canvas.width = videoEl.videoWidth;
+  canvas.height = videoEl.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function stopStream(stream){
+  if(stream){ stream.getTracks().forEach(t => t.stop()); }
+}
+
+// ---------- MRZ side ----------
+els.btnStartMrz.addEventListener('click', async () => {
+  els.btnStartMrz.disabled = true;
+  streamMrz = await startCamera(els.videoMrz, 'mrz');
+  els.btnShotMrz.disabled = false;
+  setStatus(els.statusMrz, "Fotocamera attiva — inquadra il retro");
+});
+
+els.btnShotMrz.addEventListener('click', async () => {
+  const canvas = captureFrame(els.videoMrz);
+  els.thumbMrz.src = canvas.toDataURL('image/jpeg', 0.92);
+  els.thumbMrz.classList.add('show');
+  els.videoMrz.classList.remove('active');
+  stopStream(streamMrz);
+  els.btnShotMrz.disabled = true;
+  els.btnStartMrz.style.display = 'none';
+  els.btnRetryMrz.style.display = 'inline-block';
+
+  await runMrzOcr(canvas);
+});
+
+els.btnRetryMrz.addEventListener('click', async () => {
+  els.thumbMrz.classList.remove('show');
+  els.btnRetryMrz.style.display = 'none';
+  els.btnStartMrz.style.display = 'inline-block';
+  els.btnStartMrz.disabled = false;
+  setStatus(els.statusMrz, "In attesa");
+});
+
+async function runMrzOcr(canvas){
+  els.progMrz.classList.add('show');
+  setStatus(els.statusMrz, "Lettura in corso…");
+  try{
+    const { data } = await Tesseract.recognize(canvas, 'eng', {
+      logger: m => {
+        if(m.status === 'recognizing text'){
+          els.progMrz.value = m.progress;
+          els.progMrz.max = 1;
+          setStatus(els.statusMrz, "Lettura in corso… " + Math.round(m.progress*100) + "%");
+        }
+      },
+      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
+    });
+    rawLog += "----- RETRO (MRZ) -----\n" + data.text + "\n\n";
+    els.rawText.value = rawLog;
+    const mrz = parseMrz(data.text);
+    if(mrz){
+      fillMrzFields(mrz);
+      setStatus(els.statusMrz, "Zona MRZ letta correttamente");
+    } else {
+      setStatus(els.statusMrz, "Non ho trovato una zona MRZ valida — inquadra meglio le 3 righe e riprova, oppure compila a mano", true);
+    }
+  }catch(err){
+    setStatus(els.statusMrz, "Errore OCR: " + err.message, true);
+  }finally{
+    els.progMrz.classList.remove('show');
+  }
+}
+
+// ---------- MRZ parsing (ICAO 9303, formato TD1 — 3 righe da 30 caratteri) ----------
+function parseMrz(rawText){
+  // Isola righe candidate: maiuscole/numeri/< , lunghezza vicina a 30
+  const candidates = rawText
+    .split('\n')
+    .map(l => l.replace(/[^A-Z0-9<]/g, ''))
+    .filter(l => l.length >= 20 && (l.match(/</g) || []).length >= 1);
+
+  if(candidates.length < 3) return null;
+
+  // Prendo le ultime 3 righe candidate (di solito le più pulite/lunghe in fondo al blocco)
+  const lines = candidates.slice(-3).map(l => (l + '<'.repeat(30)).slice(0, 30));
+  const [l1, l2, l3] = lines;
+
+  // Riga 2: nascita(6) check(1) sesso(1) scadenza(6) check(1) nazionalità(3) ...
+  const dobRaw = l2.slice(0, 6);
+  const sesso = l2.slice(7, 8).replace('<', '');
+  const scadRaw = l2.slice(8, 14);
+  const nazionalita = l2.slice(15, 18).replace(/</g, '');
+
+  // Riga 3: COGNOME<<NOME<MEDIO
+  const namePart = l3.replace(/<+$/, '');
+  const [cognomeRaw, nomeRaw] = namePart.split('<<');
+
+  function toDate(yymmdd){
+    if(!/^\d{6}$/.test(yymmdd)) return '';
+    const yy = parseInt(yymmdd.slice(0,2), 10);
+    const mm = yymmdd.slice(2,4);
+    const dd = yymmdd.slice(4,6);
+    const year = yy > 30 ? 1900 + yy : 2000 + yy; // soglia arbitraria, correggi a mano se serve
+    return `${dd}/${mm}/${year}`;
+  }
+  function cleanName(s){
+    return (s || '').replace(/</g, ' ').trim().replace(/\s+/g,' ');
+  }
+
+  const cognome = cleanName(cognomeRaw);
+  const nome = cleanName(nomeRaw);
+
+  if(!cognome && !nome && !dobRaw.match(/\d{6}/)) return null;
+
+  return {
+    cognome, nome,
+    dataNascita: toDate(dobRaw),
+    sesso: sesso === 'M' || sesso === 'F' ? sesso : '',
+    cittadinanza: nazionalita,
+    scadenza: toDate(scadRaw),
+  };
+}
+
+function fillMrzFields(mrz){
+  document.getElementById('f-cognome').value = mrz.cognome;
+  document.getElementById('f-nome').value = mrz.nome;
+  document.getElementById('f-dob').value = mrz.dataNascita;
+  document.getElementById('f-sesso').value = mrz.sesso;
+  document.getElementById('f-citt').value = mrz.cittadinanza;
+  document.getElementById('f-scad').value = mrz.scadenza;
+}
+
+// ---------- Fronte: luogo di nascita + codice fiscale ----------
+els.btnStartFront.addEventListener('click', async () => {
+  els.btnStartFront.disabled = true;
+  streamFront = await startCamera(els.videoFront, 'front');
+  els.btnShotFront.disabled = false;
+  setStatus(els.statusFront, "Fotocamera attiva — inquadra il fronte");
+});
+
+els.btnShotFront.addEventListener('click', async () => {
+  const canvas = captureFrame(els.videoFront);
+  els.thumbFront.src = canvas.toDataURL('image/jpeg', 0.92);
+  els.thumbFront.classList.add('show');
+  els.videoFront.classList.remove('active');
+  stopStream(streamFront);
+  els.btnShotFront.disabled = true;
+  els.btnStartFront.style.display = 'none';
+  els.btnRetryFront.style.display = 'inline-block';
+
+  await runFrontOcr(canvas);
+});
+
+els.btnRetryFront.addEventListener('click', async () => {
+  els.thumbFront.classList.remove('show');
+  els.btnRetryFront.style.display = 'none';
+  els.btnStartFront.style.display = 'inline-block';
+  els.btnStartFront.disabled = false;
+  setStatus(els.statusFront, "In attesa");
+});
+
+async function runFrontOcr(canvas){
+  els.progFront.classList.add('show');
+  setStatus(els.statusFront, "Lettura in corso…");
+  try{
+    const { data } = await Tesseract.recognize(canvas, 'ita', {
+      logger: m => {
+        if(m.status === 'recognizing text'){
+          els.progFront.value = m.progress;
+          els.progFront.max = 1;
+          setStatus(els.statusFront, "Lettura in corso… " + Math.round(m.progress*100) + "%");
+        }
+      }
+    });
+    rawLog += "----- FRONTE -----\n" + data.text + "\n\n";
+    els.rawText.value = rawLog;
+
+    // Codice fiscale: pattern classico 16 caratteri alfanumerici
+    const cfMatch = data.text.toUpperCase().replace(/\s+/g,'').match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
+    if(cfMatch){
+      document.getElementById('f-cf').value = cfMatch[0];
+    }
+
+    // Luogo di nascita: cerchiamo una riga vicina alla dicitura "nato a / luogo di nascita"
+    const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
+    let luogo = '';
+    for(let i=0;i<lines.length;i++){
+      if(/luogo di nascita|nato a|nata a/i.test(lines[i])){
+        luogo = (lines[i].split(/luogo di nascita|nato a|nata a/i)[1] || lines[i+1] || '').trim();
+        break;
+      }
+    }
+    if(luogo) document.getElementById('f-luogo').value = luogo.replace(/[^A-Za-zÀ-ÿ' ]/g, '').trim();
+
+    setStatus(els.statusFront, cfMatch ? "Codice fiscale individuato — verifica gli altri campi a mano" : "Lettura completata — verifica i campi a mano, il fronte è meno affidabile");
+  }catch(err){
+    setStatus(els.statusFront, "Errore OCR: " + err.message, true);
+  }finally{
+    els.progFront.classList.remove('show');
+  }
+}
+
+// ---------- Invio ----------
+els.btnSend.addEventListener('click', async () => {
+  const url = els.apiUrl.value.trim();
+  if(!url){
+    setStatus(els.statusSend, "Inserisci prima l'URL dell'API", true);
+    return;
+  }
+  const payload = {
+    cognome: document.getElementById('f-cognome').value,
+    nome: document.getElementById('f-nome').value,
+    dataNascita: document.getElementById('f-dob').value,
+    sesso: document.getElementById('f-sesso').value,
+    cittadinanza: document.getElementById('f-citt').value,
+    scadenzaCarta: document.getElementById('f-scad').value,
+    luogoNascita: document.getElementById('f-luogo').value,
+    codiceFiscale: document.getElementById('f-cf').value,
+  };
+  setStatus(els.statusSend, "Invio in corso…");
+  try{
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    setStatus(els.statusSend, res.ok ? "Inviato correttamente (" + res.status + ")" : "Risposta con errore (" + res.status + ")", !res.ok);
+  }catch(err){
+    setStatus(els.statusSend, "Chiamata fallita: " + err.message + " — probabile blocco CORS lato server esterno", true);
+  }
+});
+</script>
+</body>
+</html>
