@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Lettore Carta d'Identità — Demo</title>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <style>
   :root{
@@ -124,10 +123,6 @@
     background:rgba(255,209,102,0.14);
     border-radius:4px;
   }
-  .mrz-line-divider{
-    position:absolute;
-    border-top:1px dashed rgba(255,209,102,0.6);
-  }
   .mrz-label{
     position:absolute;
     font-family:var(--mono);
@@ -155,25 +150,6 @@
     border:1px solid var(--line);
   }
   .thumb.show{ display:block; }
-
-  .crop-preview{
-    display:none;
-    width:100%;
-    margin-top:8px;
-    border-radius:6px;
-    border:1px solid var(--line);
-    background:#000;
-    image-rendering:pixelated;
-  }
-  .crop-preview.show{ display:block; }
-  .crop-preview-label{
-    display:none;
-    font-family:var(--mono);
-    font-size:11px;
-    color:#6b6a61;
-    margin-top:6px;
-  }
-  .crop-preview-label.show{ display:block; }
 
   .btn-row{
     display:flex;
@@ -300,7 +276,7 @@
 <div class="wrap">
 
   <header>
-    <div class="eyebrow">Demo — non salva né invia dati a terzi</div>
+    <div class="eyebrow">Demo — le foto vengono inviate a Google Cloud Vision per la lettura</div>
     <h1>Lettore Carta d'Identità</h1>
     <p>Fotografa il retro della carta per leggere automaticamente i dati anagrafici e il codice fiscale, poi correggi a mano quello che serve prima di inviare.</p>
   </header>
@@ -311,22 +287,18 @@
       <span class="step-num">1</span>
       <h2>Retro della carta — dati anagrafici e codice fiscale</h2>
     </div>
-    <p class="hint">Allinea la carta al riquadro bianco. La fascia gialla in basso deve contenere le 3 righe di testo maiuscolo con i simboli «&lt;»: viene letta riga per riga con un modello OCR dedicato alla MRZ. Il codice fiscale viene letto dal codice a barre.</p>
+    <p class="hint">Allinea la carta al riquadro bianco. La fascia gialla in basso deve contenere le 3 righe di testo maiuscolo con i simboli «&lt;».</p>
 
     <div class="cam-frame" id="frameMrz">
       <video id="videoMrz" playsinline autoplay muted></video>
       <div class="cam-guide" id="guideMrz">
         <div class="card-box" id="cardBoxMrz"></div>
         <div class="mrz-band" id="mrzBandMrz"></div>
-        <div class="mrz-line-divider" id="mrzDiv1"></div>
-        <div class="mrz-line-divider" id="mrzDiv2"></div>
-        <div class="mrz-label" id="mrzLabelMrz">Zona MRZ — 3 righe</div>
+        <div class="mrz-label" id="mrzLabelMrz">Zona MRZ</div>
       </div>
       <div class="cam-caption">Inquadra il retro dentro il riquadro</div>
     </div>
     <img id="thumbMrz" class="thumb" alt="Foto del retro della carta">
-    <img id="cropMrz" class="crop-preview" alt="Fascia MRZ ritagliata">
-    <div class="crop-preview-label" id="cropMrzLabel">Ritaglio inviato all'OCR (diviso in 3 righe)</div>
 
     <div class="btn-row">
       <button id="btnStartMrz">Attiva fotocamera</button>
@@ -337,13 +309,13 @@
     <div id="statusMrz" class="status">In attesa</div>
   </div>
 
-  <!-- STEP 2: FRONTE / conferma luogo di nascita -->
+  <!-- STEP 2: FRONTE / luogo di nascita -->
   <div class="step">
     <div class="step-head">
       <span class="step-num">2</span>
       <h2>Fronte della carta — luogo di nascita</h2>
     </div>
-    <p class="hint">Il luogo di nascita non fa parte della zona a lettura ottica e si trova solo sul fronte, quindi va letto qui. Verificalo sempre a mano.</p>
+    <p class="hint">Il luogo di nascita non fa parte della zona a lettura ottica e si trova solo sul fronte. Verifica sempre a mano.</p>
 
     <div class="cam-frame" id="frameFront">
       <video id="videoFront" playsinline autoplay muted></video>
@@ -429,7 +401,7 @@
     <div id="statusSend" class="status"></div>
   </div>
 
-  <footer>Elaborazione OCR/barcode interamente nel browser · nessun dato lascia il dispositivo finché non premi "Invia"</footer>
+  <footer>OCR: Google Cloud Vision (via backend) · Codice fiscale: barcode letto nel browser</footer>
 </div>
 
 <script>
@@ -438,12 +410,8 @@ const els = {
   videoMrz: document.getElementById('videoMrz'),
   cardBoxMrz: document.getElementById('cardBoxMrz'),
   mrzBandMrz: document.getElementById('mrzBandMrz'),
-  mrzDiv1: document.getElementById('mrzDiv1'),
-  mrzDiv2: document.getElementById('mrzDiv2'),
   mrzLabelMrz: document.getElementById('mrzLabelMrz'),
   thumbMrz: document.getElementById('thumbMrz'),
-  cropMrz: document.getElementById('cropMrz'),
-  cropMrzLabel: document.getElementById('cropMrzLabel'),
   btnStartMrz: document.getElementById('btnStartMrz'),
   btnShotMrz: document.getElementById('btnShotMrz'),
   btnRetryMrz: document.getElementById('btnRetryMrz'),
@@ -469,32 +437,13 @@ const els = {
 let streamMrz = null;
 let streamFront = null;
 let rawLog = "";
-let mrzWorkerPromise = null;
 
 const CARD_RATIO = 85.60 / 53.98;
 const MRZ_BAND_RATIO = 0.34;
-// Repository con un modello Tesseract addestrato sul font OCR-B (quello usato nelle zone MRZ),
-// molto più affidabile del modello inglese generico per riconoscere lettere e simboli "<".
-const OCRB_LANG_PATH = "https://raw.githubusercontent.com/DaanVanVugt/tesseract-mrz/master/lang";
 
 function setStatus(node, text, warn){
   node.textContent = text;
   node.classList.toggle('warn', !!warn);
-}
-
-// ---------- Worker OCR-B (riusato per tutte le righe MRZ) ----------
-async function getMrzWorker(){
-  if(!mrzWorkerPromise){
-    mrzWorkerPromise = (async () => {
-      const worker = await Tesseract.createWorker('OCRB', 1, { langPath: OCRB_LANG_PATH });
-      await worker.setParameters({
-        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<",
-        tessedit_pageseg_mode: "7" // singola riga di testo
-      });
-      return worker;
-    })();
-  }
-  return mrzWorkerPromise;
 }
 
 // ---------- Geometria guida ----------
@@ -510,7 +459,7 @@ function computeCardRect(clientW, clientH){
   return { x, y, w, h };
 }
 
-function sizeGuide(videoEl, boxEl, bandEl, div1El, div2El, labelEl){
+function sizeGuide(videoEl, boxEl, bandEl, labelEl){
   const clientW = videoEl.clientWidth;
   const clientH = videoEl.clientHeight;
   if(!clientW || !clientH) return;
@@ -531,15 +480,6 @@ function sizeGuide(videoEl, boxEl, bandEl, div1El, div2El, labelEl){
     if(labelEl){
       labelEl.style.left = card.x + 'px';
       labelEl.style.top = (bandY - 20) + 'px';
-    }
-    if(div1El && div2El){
-      const lineH = bandH / 3;
-      div1El.style.left = card.x + 'px';
-      div1El.style.width = card.w + 'px';
-      div1El.style.top = (bandY + lineH) + 'px';
-      div2El.style.left = card.x + 'px';
-      div2El.style.width = card.w + 'px';
-      div2El.style.top = (bandY + lineH * 2) + 'px';
     }
   }
 }
@@ -591,22 +531,35 @@ function fullFrameCanvas(videoEl){
   return canvas;
 }
 
-function cropAndEnhance(videoEl, rect, upscale){
+// Ritaglio "pulito" per il cloud OCR: solo ingrandimento, senza filtri aggressivi
+// (Google Vision lavora bene su immagini naturali, a differenza di Tesseract).
+function cropForCloud(videoEl, rect, upscale){
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(rect.w * upscale));
   canvas.height = Math.max(1, Math.round(rect.h * upscale));
   const ctx = canvas.getContext('2d');
-  ctx.filter = 'grayscale(1) contrast(1.6) brightness(1.05)';
   ctx.drawImage(videoEl, rect.x, rect.y, rect.w, rect.h, 0, 0, canvas.width, canvas.height);
   return canvas;
 }
 
-function sliceCanvas(sourceCanvas, yStart, height){
-  const canvas = document.createElement('canvas');
-  canvas.width = sourceCanvas.width;
-  canvas.height = height;
-  canvas.getContext('2d').drawImage(sourceCanvas, 0, yStart, sourceCanvas.width, height, 0, 0, sourceCanvas.width, height);
-  return canvas;
+function canvasToBase64(canvas){
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  return dataUrl.split(',')[1];
+}
+
+// ---------- Chiamata al backend (Google Cloud Vision via funzione serverless) ----------
+async function ocrViaCloud(canvas){
+  const imageBase64 = canvasToBase64(canvas);
+  const res = await fetch('/api/ocr', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ imageBase64 })
+  });
+  const data = await res.json();
+  if(!res.ok){
+    throw new Error(data.error || ('Errore HTTP ' + res.status));
+  }
+  return data.text || '';
 }
 
 // ---------- Lettura codice a barre (Code 39, tipico del codice fiscale sulla CIE) ----------
@@ -626,17 +579,17 @@ async function tryBarcodeCf(canvas){
     const result = await reader.decodeFromImageElement(img);
     return (result.getText() || '').toUpperCase().trim();
   }catch(err){
-    return null; // nessun barcode trovato — normale se l'inquadratura non lo comprende
+    return null;
   }
 }
 
 // ---------- MRZ side ----------
 els.videoMrz.addEventListener('loadedmetadata', () => {
-  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzDiv1, els.mrzDiv2, els.mrzLabelMrz);
+  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzLabelMrz);
 });
 window.addEventListener('resize', () => {
-  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzDiv1, els.mrzDiv2, els.mrzLabelMrz);
-  sizeGuide(els.videoFront, els.cardBoxFront, null, null, null, null);
+  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzLabelMrz);
+  sizeGuide(els.videoFront, els.cardBoxFront, null, null);
 });
 
 els.btnStartMrz.addEventListener('click', async () => {
@@ -651,108 +604,105 @@ els.btnShotMrz.addEventListener('click', async () => {
   els.thumbMrz.src = full.toDataURL('image/jpeg', 0.9);
   els.thumbMrz.classList.add('show');
 
-  const bandRect = nativeRect(els.videoMrz, true);
-  const bandEnhanced = cropAndEnhance(els.videoMrz, bandRect, 3);
-  els.cropMrz.src = bandEnhanced.toDataURL('image/png');
-  els.cropMrz.classList.add('show');
-  els.cropMrzLabel.classList.add('show');
-
   els.frameMrz.classList.remove('active');
   stopStream(streamMrz);
   els.btnShotMrz.disabled = true;
   els.btnStartMrz.style.display = 'none';
   els.btnRetryMrz.style.display = 'inline-block';
 
-  await runRetroOcr(bandEnhanced, full);
+  await runRetroOcr(full);
 });
 
 els.btnRetryMrz.addEventListener('click', async () => {
   els.thumbMrz.classList.remove('show');
-  els.cropMrz.classList.remove('show');
-  els.cropMrzLabel.classList.remove('show');
   els.btnRetryMrz.style.display = 'none';
   els.btnStartMrz.style.display = 'inline-block';
   els.btnStartMrz.disabled = false;
   setStatus(els.statusMrz, "In attesa");
 });
 
-async function runRetroOcr(bandCanvas, fullCanvas){
+async function runRetroOcr(fullCanvas){
   els.progMrz.classList.add('show');
   els.progMrz.max = 1;
 
-  // --- 1) Codice fiscale dal codice a barre (parte in parallelo, è indipendente dalla MRZ) ---
+  // --- 1) Codice fiscale dal codice a barre (client-side, indipendente dal cloud) ---
   setStatus(els.statusMrz, "Cerco il codice a barre del codice fiscale…");
-  els.progMrz.value = 0.1;
+  els.progMrz.value = 0.15;
   const barcodeText = await tryBarcodeCf(fullCanvas);
   rawLog += "----- RETRO — tentativo lettura codice a barre -----\n" + (barcodeText || '(nessun barcode trovato)') + "\n\n";
 
-  const cfFromBarcode = barcodeText && barcodeText.match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
   const cfFlag = document.getElementById('flag-cf');
+  const cfFromBarcode = barcodeText && barcodeText.match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
   if(cfFromBarcode){
     document.getElementById('f-cf').value = cfFromBarcode[0];
     cfFlag.textContent = 'CODICE A BARRE';
     cfFlag.classList.remove('check');
   }
 
-  // --- 2) MRZ, riga per riga, con il modello OCR-B dedicato ---
-  const worker = await getMrzWorker();
-  const lineH = bandCanvas.height / 3;
-  const lineTexts = [];
-  for(let i = 0; i < 3; i++){
-    setStatus(els.statusMrz, `Lettura MRZ — riga ${i+1} di 3…`);
-    els.progMrz.value = 0.2 + i * 0.2;
-    const lineCanvas = sliceCanvas(bandCanvas, Math.round(i*lineH), Math.round(lineH));
-    try{
-      const { data } = await worker.recognize(lineCanvas);
-      lineTexts.push(data.text.replace(/[^A-Z0-9<]/g, ''));
-    }catch(err){
-      lineTexts.push('');
+  // --- 2) MRZ — invio la fascia ritagliata a Google Vision tramite il nostro backend ---
+  setStatus(els.statusMrz, "Leggo la MRZ (Google Vision)…");
+  els.progMrz.value = 0.4;
+  try{
+    const bandRect = nativeRect(els.videoMrz, true);
+    const bandCanvas = cropForCloud(els.videoMrz, bandRect, 2.5);
+    const mrzText = await ocrViaCloud(bandCanvas);
+    rawLog += "----- RETRO — MRZ (Google Vision) -----\n" + mrzText + "\n\n";
+    els.rawText.value = rawLog;
+
+    const mrz = parseMrz(mrzText);
+    if(mrz){
+      fillMrzFields(mrz);
+    } else {
+      setStatus(els.statusMrz, "MRZ non riconosciuta — controlla la foto qui sopra e valuta di rifare lo scatto", true);
     }
-  }
-  rawLog += "----- RETRO — MRZ riga per riga (modello OCR-B) -----\n" + lineTexts.join('\n') + "\n\n";
-  els.rawText.value = rawLog;
-
-  const mrz = parseMrzLines(lineTexts);
-  if(mrz){
-    fillMrzFields(mrz);
+  }catch(err){
+    rawLog += "----- Errore lettura MRZ -----\n" + err.message + "\n\n";
+    els.rawText.value = rawLog;
+    setStatus(els.statusMrz, "Errore nella lettura MRZ: " + err.message, true);
   }
 
-  // --- 3) Se il barcode non ha dato nulla, provo comunque a cercare il CF via OCR sull'intera carta ---
+  // --- 3) Se il barcode non ha dato nulla, provo il CF via OCR sull'intera carta ---
   if(!cfFromBarcode){
-    setStatus(els.statusMrz, "Barcode non trovato — provo a leggere il codice fiscale via OCR…");
-    els.progMrz.value = 0.9;
+    setStatus(els.statusMrz, "Barcode non trovato — provo il codice fiscale via OCR…");
+    els.progMrz.value = 0.8;
     try{
-      const cardEnhanced = cropAndEnhance(els.videoMrz.videoWidth ? els.videoMrz : els.videoMrz, nativeRect(els.videoMrz, false), 1.8);
-      const { data } = await Tesseract.recognize(cardEnhanced, 'eng', {
-        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-      });
-      rawLog += "----- RETRO — intera carta (ricerca CF via OCR, fallback) -----\n" + data.text + "\n\n";
+      const cardRect = nativeRect(els.videoMrz, false);
+      const cardCanvas = cropForCloud(els.videoMrz, cardRect, 1.8);
+      const cardText = await ocrViaCloud(cardCanvas);
+      rawLog += "----- RETRO — intera carta, ricerca CF (Google Vision) -----\n" + cardText + "\n\n";
       els.rawText.value = rawLog;
-      const cfMatch = data.text.toUpperCase().replace(/\s+/g,'').match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
+      const cfMatch = cardText.toUpperCase().replace(/\s+/g,'').match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
       if(cfMatch){
         document.getElementById('f-cf').value = cfMatch[0];
         cfFlag.textContent = 'RETRO (OCR)';
         cfFlag.classList.remove('check');
       }
-    }catch(err){ /* fallback silenzioso, il campo resta da compilare a mano */ }
+    }catch(err){ /* fallback silenzioso */ }
   }
 
+  const mrzFilled = document.getElementById('f-cognome').value.length > 0;
   const cfFilled = document.getElementById('f-cf').value.length > 0;
-  if(mrz && cfFilled){
+  if(mrzFilled && cfFilled){
     setStatus(els.statusMrz, "MRZ e codice fiscale letti correttamente");
-  } else if(mrz){
+  } else if(mrzFilled){
     setStatus(els.statusMrz, "MRZ letta — codice fiscale non trovato, inseriscilo a mano", true);
   } else if(cfFilled){
     setStatus(els.statusMrz, "Codice fiscale trovato — MRZ incompleta, verifica gli altri campi a mano", true);
-  } else {
-    setStatus(els.statusMrz, "Lettura incompleta — controlla il ritaglio qui sopra e valuta di rifare la foto", true);
   }
   els.progMrz.classList.remove('show');
 }
 
-// ---------- MRZ parsing (ICAO 9303, TD1 — 3 righe già separate da 30 caratteri) ----------
-function parseMrzLines(lineTexts){
-  const lines = lineTexts.map(l => (l + '<'.repeat(30)).slice(0, 30));
+// ---------- MRZ parsing (ICAO 9303, TD1 — 3 righe da 30 caratteri) ----------
+function parseMrz(rawText){
+  const candidates = rawText
+    .toUpperCase()
+    .split('\n')
+    .map(l => l.replace(/[^A-Z0-9<]/g, ''))
+    .filter(l => l.length >= 20 && (l.match(/</g) || []).length >= 1);
+
+  if(candidates.length < 3) return null;
+
+  const lines = candidates.slice(-3).map(l => (l + '<'.repeat(30)).slice(0, 30));
   const [l1, l2, l3raw] = lines;
 
   const dobRaw = l2.slice(0, 6);
@@ -760,8 +710,6 @@ function parseMrzLines(lineTexts){
   const scadRaw = l2.slice(8, 14);
   const nazionalita = l2.slice(15, 18).replace(/</g, '');
 
-  // Nella riga dei nomi non possono comparire cifre: qualunque cifra letta è quasi certamente
-  // un carattere '<' mal riconosciuto, quindi la normalizziamo prima di separare cognome/nome.
   const l3 = l3raw.replace(/[0-9]/g, '<');
   const namePart = l3.replace(/<+$/, '');
   const [cognomeRaw, nomeRaw] = splitSurnameGiven(namePart);
@@ -794,9 +742,6 @@ function parseMrzLines(lineTexts){
   };
 }
 
-// Individua il separatore cognome/nome cercando la sequenza più lunga di '<' consecutivi:
-// è più robusto della ricerca letterale di "<<", perché tollera letture imperfette
-// (es. un solo '<' invece di due, o viceversa).
 function splitSurnameGiven(namePart){
   const runs = [...namePart.matchAll(/<+/g)];
   if(runs.length === 0) return [namePart, ''];
@@ -818,7 +763,7 @@ function fillMrzFields(mrz){
 
 // ---------- Fronte: luogo di nascita ----------
 els.videoFront.addEventListener('loadedmetadata', () => {
-  sizeGuide(els.videoFront, els.cardBoxFront, null, null, null, null);
+  sizeGuide(els.videoFront, els.cardBoxFront, null, null);
 });
 
 els.btnStartFront.addEventListener('click', async () => {
@@ -830,8 +775,8 @@ els.btnStartFront.addEventListener('click', async () => {
 
 els.btnShotFront.addEventListener('click', async () => {
   const cardRect = nativeRect(els.videoFront, false);
-  const enhanced = cropAndEnhance(els.videoFront, cardRect, 1.8);
-  els.thumbFront.src = enhanced.toDataURL('image/jpeg', 0.9);
+  const cardCanvas = cropForCloud(els.videoFront, cardRect, 1.8);
+  els.thumbFront.src = cardCanvas.toDataURL('image/jpeg', 0.9);
   els.thumbFront.classList.add('show');
 
   els.frameFront.classList.remove('active');
@@ -840,7 +785,7 @@ els.btnShotFront.addEventListener('click', async () => {
   els.btnStartFront.style.display = 'none';
   els.btnRetryFront.style.display = 'inline-block';
 
-  await runFrontOcr(enhanced);
+  await runFrontOcr(cardCanvas);
 });
 
 els.btnRetryFront.addEventListener('click', async () => {
@@ -853,21 +798,16 @@ els.btnRetryFront.addEventListener('click', async () => {
 
 async function runFrontOcr(canvas){
   els.progFront.classList.add('show');
-  setStatus(els.statusFront, "Lettura in corso…");
+  els.progFront.value = 0.3;
+  els.progFront.max = 1;
+  setStatus(els.statusFront, "Lettura in corso (Google Vision)…");
   try{
-    const { data } = await Tesseract.recognize(canvas, 'ita', {
-      logger: m => {
-        if(m.status === 'recognizing text'){
-          els.progFront.value = m.progress;
-          els.progFront.max = 1;
-          setStatus(els.statusFront, "Lettura in corso… " + Math.round(m.progress*100) + "%");
-        }
-      }
-    });
-    rawLog += "----- FRONTE (ricerca luogo di nascita) -----\n" + data.text + "\n\n";
+    const text = await ocrViaCloud(canvas);
+    els.progFront.value = 0.9;
+    rawLog += "----- FRONTE (Google Vision) -----\n" + text + "\n\n";
     els.rawText.value = rawLog;
 
-    const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     let luogo = '';
     for(let i=0;i<lines.length;i++){
       if(/luogo\s*e?\s*data\s*di\s*nascita|luogo di nascita|nato a|nata a/i.test(lines[i])){
@@ -882,7 +822,7 @@ async function runFrontOcr(canvas){
       setStatus(els.statusFront, "Non ho trovato automaticamente il luogo di nascita — inseriscilo a mano guardando la foto qui sopra", true);
     }
   }catch(err){
-    setStatus(els.statusFront, "Errore OCR: " + err.message, true);
+    setStatus(els.statusFront, "Errore: " + err.message, true);
   }finally{
     els.progFront.classList.remove('show');
   }
