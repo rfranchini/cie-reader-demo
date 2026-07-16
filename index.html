@@ -350,6 +350,7 @@
 
     <div class="btn-row">
       <button id="btnStartBarcode">Attiva fotocamera</button>
+      <button id="btnShotBarcode" class="secondary" disabled>Scatta e cerca a fondo</button>
       <button id="btnRetryBarcode" class="secondary" style="display:none">Riprova</button>
     </div>
     <div id="statusBarcode" class="status">In attesa</div>
@@ -469,6 +470,7 @@ const els = {
   cardBoxBarcode: document.getElementById('cardBoxBarcode'),
   barcodeZoneBox: document.getElementById('barcodeZoneBox'),
   btnStartBarcode: document.getElementById('btnStartBarcode'),
+  btnShotBarcode: document.getElementById('btnShotBarcode'),
   btnRetryBarcode: document.getElementById('btnRetryBarcode'),
   statusBarcode: document.getElementById('statusBarcode'),
 
@@ -490,7 +492,6 @@ const els = {
 
 let streamMrz = null;
 let streamFront = null;
-let barcodeReader = null;
 let barcodeStream = null;
 let rawLog = "";
 
@@ -778,23 +779,129 @@ function fillMrzFields(mrz){
 }
 
 // =========================================================
-// STEP 2 — CODICE A BARRE (lettura live, nessun invio al cloud)
+// STEP 2 — CODICE A BARRE
 // =========================================================
 els.videoBarcode.addEventListener('loadedmetadata', () => {
   sizeGuideBarcodeZone(els.videoBarcode, els.cardBoxBarcode, els.barcodeZoneBox);
 });
+
+let liveDetectTimer = null;
 
 els.btnStartBarcode.addEventListener('click', async () => {
   els.btnStartBarcode.disabled = true;
   setStatus(els.statusBarcode, "Avvio fotocamera…");
   try{
     barcodeStream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode: { ideal:"environment" }, width:{ ideal:1280 }, height:{ ideal:960 } },
+      // Risoluzione più alta del solito: qui non facciamo scansione continua pesante,
+      // ma un singolo scatto ad alta definizione è la parte che conta davvero.
+      video:{ facingMode: { ideal:"environment" }, width:{ ideal:1920 }, height:{ ideal:1440 } },
       audio:false
     });
     els.videoBarcode.srcObject = barcodeStream;
     els.frameBarcode.classList.add('active');
-    setStatus(els.statusBarcode, "Ricerca in corso — inquadra il codice a barre…");
+    els.btnShotBarcode.disabled = false;
+    setStatus(els.statusBarcode, "Allinea il codice a barre nel riquadro, poi tocca \"Scatta e cerca a fondo\" (o aspetta: provo anche in automatico)");
+
+    startLiveDetectLoop();
+  }catch(err){
+    setStatus(els.statusBarcode, "Errore fotocamera: " + err.message, 'warn');
+    els.btnStartBarcode.disabled = false;
+  }
+});
+
+// Tentativo "in automatico" leggero, mentre il video è live: usa l'API nativa del
+// browser quando disponibile (spesso più robusta di una libreria JS), a basso costo.
+// Se il browser non la supporta, questo passaggio semplicemente non fa nulla e si
+// affida allo scatto manuale, che resta il metodo principale e affidabile.
+function startLiveDetectLoop(){
+  if(!('BarcodeDetector' in window)) return;
+  liveDetectTimer = setInterval(async () => {
+    if(!barcodeStream) return;
+    try{
+      const bitmap = await createImageBitmap(els.videoBarcode);
+      const cf = await tryNativeBarcodeDetector(bitmap);
+      if(cf){
+        applyCfResult(cf, 'CODICE A BARRE (live)');
+        setStatus(els.statusBarcode, "Codice fiscale letto: " + cf, 'ok');
+        stopBarcodeScan();
+      }
+    }catch(e){ /* fotogramma non valido, riprovo al prossimo giro */ }
+  }, 450);
+}
+
+els.btnShotBarcode.addEventListener('click', async () => {
+  setStatus(els.statusBarcode, "Analisi in corso…");
+  els.btnShotBarcode.disabled = true;
+
+  // Ritaglio ad alta risoluzione della sola zona del codice a barre (con un margine
+  // generoso sopra/sotto, per tollerare imprecisioni nell'allineamento), ingrandito molto.
+  const card = computeCardRect(els.videoBarcode.clientWidth, els.videoBarcode.clientHeight);
+  const zoneDisp = {
+    x: card.x,
+    y: card.y + card.h * 0.34,
+    w: card.w,
+    h: card.h * 0.38,
+  };
+  const zoneNative = toNativePixels(els.videoBarcode, zoneDisp);
+  const zoneCanvas = cropForBarcodeZone(els.videoBarcode, zoneNative, 4);
+
+  const cf = await tryDecodeBarcodeMultiPass(zoneCanvas);
+  if(cf){
+    applyCfResult(cf, 'CODICE A BARRE');
+    setStatus(els.statusBarcode, "Codice fiscale letto: " + cf, 'ok');
+    stopBarcodeScan();
+    els.btnStartBarcode.style.display = 'none';
+    els.btnShotBarcode.style.display = 'none';
+    els.btnRetryBarcode.style.display = 'inline-block';
+  }else{
+    setStatus(els.statusBarcode, "Non ancora trovato — prova a inclinare leggermente la carta o avvicinarti, poi scatta di nuovo", 'warn');
+    els.btnShotBarcode.disabled = false;
+  }
+});
+
+function cropForBarcodeZone(videoEl, rect, upscale){
+  const w = Math.max(1, Math.round(rect.w * upscale));
+  const h = Math.max(1, Math.round(rect.h * upscale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(videoEl, rect.x, rect.y, rect.w, rect.h, 0, 0, w, h);
+  return canvas;
+}
+
+function enhanceForBarcode(canvas){
+  const out = document.createElement('canvas');
+  out.width = canvas.width;
+  out.height = canvas.height;
+  const ctx = out.getContext('2d');
+  ctx.filter = 'grayscale(1) contrast(2.3) brightness(1.08)';
+  ctx.drawImage(canvas, 0, 0);
+  return out;
+}
+
+function rotateCanvas(canvas, angleDeg){
+  const rad = angleDeg * Math.PI / 180;
+  const w = canvas.width, h = canvas.height;
+  const newW = Math.ceil(Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad)));
+  const newH = Math.ceil(Math.abs(w * Math.sin(rad)) + Math.abs(h * Math.cos(rad)));
+  const out = document.createElement('canvas');
+  out.width = newW;
+  out.height = newH;
+  const ctx = out.getContext('2d');
+  ctx.translate(newW / 2, newH / 2);
+  ctx.rotate(rad);
+  ctx.drawImage(canvas, -w / 2, -h / 2);
+  return out;
+}
+
+const CF_PATTERN = /[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/;
+
+async function decodeBarcodeFromCanvas(canvas){
+  try{
+    const dataUrl = canvas.toDataURL('image/png');
+    const img = new Image();
+    img.src = dataUrl;
+    await img.decode();
 
     const hints = new Map();
     hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
@@ -802,37 +909,63 @@ els.btnStartBarcode.addEventListener('click', async () => {
       ZXing.BarcodeFormat.CODE_128
     ]);
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    barcodeReader = new ZXing.BrowserMultiFormatReader(hints);
-
-    barcodeReader.decodeFromStream(barcodeStream, els.videoBarcode, (result, err) => {
-      if(result){
-        const text = (result.getText() || '').toUpperCase().trim();
-        const cfMatch = text.match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
-        if(cfMatch){
-          document.getElementById('f-cf').value = cfMatch[0];
-          const flag = document.getElementById('flag-cf');
-          flag.textContent = 'CODICE A BARRE';
-          flag.classList.remove('check');
-          setStatus(els.statusBarcode, "Codice fiscale letto: " + cfMatch[0], 'ok');
-          stopBarcodeScan();
-          els.btnStartBarcode.style.display = 'none';
-          els.btnRetryBarcode.style.display = 'inline-block';
-        }
-        // se il testo decodificato non è nel formato atteso, continuo a scansionare senza fermarmi
-      }
-      // gli errori "NotFoundException" per ogni fotogramma senza barcode sono normali, si ignorano
-    });
+    const reader = new ZXing.BrowserMultiFormatReader(hints);
+    const result = await reader.decodeFromImageElement(img);
+    return (result.getText() || '').toUpperCase().trim();
   }catch(err){
-    setStatus(els.statusBarcode, "Errore fotocamera: " + err.message, 'warn');
-    els.btnStartBarcode.disabled = false;
+    return null;
   }
-});
+}
+
+async function tryNativeBarcodeDetector(source){
+  if(!('BarcodeDetector' in window)) return null;
+  try{
+    const detector = new window.BarcodeDetector({ formats: ['code_39', 'code_128'] });
+    const results = await detector.detect(source);
+    for(const r of results){
+      const match = (r.rawValue || '').toUpperCase().match(CF_PATTERN);
+      if(match) return match[0];
+    }
+  }catch(e){ /* API non disponibile per questo formato/browser */ }
+  return null;
+}
+
+// Prova più varianti della stessa immagine (originale, alto contrasto, leggere
+// rotazioni) sia con l'API nativa del browser sia con ZXing, fermandosi alla prima
+// lettura valida. Un codice inciso al laser leggermente storto o poco contrastato
+// spesso si legge in una di queste varianti anche se fallisce sull'originale.
+async function tryDecodeBarcodeMultiPass(baseCanvas){
+  const variants = [
+    baseCanvas,
+    enhanceForBarcode(baseCanvas),
+    rotateCanvas(baseCanvas, 6),
+    rotateCanvas(baseCanvas, -6),
+    rotateCanvas(enhanceForBarcode(baseCanvas), 6),
+    rotateCanvas(enhanceForBarcode(baseCanvas), -6),
+  ];
+
+  for(const variant of variants){
+    const native = await tryNativeBarcodeDetector(variant);
+    if(native) return native;
+
+    const zxingText = await decodeBarcodeFromCanvas(variant);
+    if(zxingText){
+      const match = zxingText.match(CF_PATTERN);
+      if(match) return match[0];
+    }
+  }
+  return null;
+}
+
+function applyCfResult(cf, label){
+  document.getElementById('f-cf').value = cf;
+  const flag = document.getElementById('flag-cf');
+  flag.textContent = label;
+  flag.classList.remove('check');
+}
 
 function stopBarcodeScan(){
-  if(barcodeReader){
-    try{ barcodeReader.reset(); }catch(e){}
-    barcodeReader = null;
-  }
+  if(liveDetectTimer){ clearInterval(liveDetectTimer); liveDetectTimer = null; }
   stopStream(barcodeStream);
   barcodeStream = null;
   els.frameBarcode.classList.remove('active');
@@ -841,7 +974,9 @@ function stopBarcodeScan(){
 els.btnRetryBarcode.addEventListener('click', () => {
   els.btnRetryBarcode.style.display = 'none';
   els.btnStartBarcode.style.display = 'inline-block';
+  els.btnShotBarcode.style.display = 'inline-block';
   els.btnStartBarcode.disabled = false;
+  els.btnShotBarcode.disabled = true;
   setStatus(els.statusBarcode, "In attesa");
 });
 
