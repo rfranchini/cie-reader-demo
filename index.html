@@ -528,7 +528,10 @@ function nativeRect(videoEl, withMrzBand){
 async function startCamera(frameEl, videoEl){
   try{
     const stream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode: { ideal:"environment" } },
+      // Risoluzione moderata: basta e avanza per l'OCR ed evita che la foto,
+      // una volta ritagliata e ingrandita, superi il limite di ~4.5MB per
+      // richiesta imposto dalle funzioni serverless di Vercel.
+      video:{ facingMode: { ideal:"environment" }, width:{ ideal:1600 }, height:{ ideal:1200 } },
       audio:false
     });
     videoEl.srcObject = stream;
@@ -552,17 +555,29 @@ function fullFrameCanvas(videoEl){
   return canvas;
 }
 
+// Tetto massimo (lato lungo, in pixel) per qualunque immagine inviata al backend:
+// mantiene il payload ben al di sotto del limite di ~4.5MB per richiesta di Vercel.
+const MAX_CLOUD_IMAGE_SIDE = 1600;
+
 function cropForCloud(videoEl, rect, upscale){
+  let w = Math.max(1, Math.round(rect.w * upscale));
+  let h = Math.max(1, Math.round(rect.h * upscale));
+  const longSide = Math.max(w, h);
+  if(longSide > MAX_CLOUD_IMAGE_SIDE){
+    const clamp = MAX_CLOUD_IMAGE_SIDE / longSide;
+    w = Math.round(w * clamp);
+    h = Math.round(h * clamp);
+  }
   const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(rect.w * upscale));
-  canvas.height = Math.max(1, Math.round(rect.h * upscale));
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d');
   ctx.drawImage(videoEl, rect.x, rect.y, rect.w, rect.h, 0, 0, canvas.width, canvas.height);
   return canvas;
 }
 
 function canvasToBase64(canvas){
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
   return dataUrl.split(',')[1];
 }
 
