@@ -640,13 +640,18 @@ els.btnShotMrz.addEventListener('click', async () => {
   els.thumbMrz.src = full.toDataURL('image/jpeg', 0.9);
   els.thumbMrz.classList.add('show');
 
+  // Il ritaglio va calcolato PRIMA di fermare lo stream: una volta fermato/nascosto
+  // il video, le sue dimensioni diventano 0 e il ritaglio risulterebbe vuoto.
+  const cardRect = nativeRect(els.videoMrz, false);
+  const cardCanvas = cropForCloud(els.videoMrz, cardRect, 2.0);
+
   els.frameMrz.classList.remove('active');
   stopStream(streamMrz);
   els.btnShotMrz.disabled = true;
   els.btnStartMrz.style.display = 'none';
   els.btnRetryMrz.style.display = 'inline-block';
 
-  await runRetroOcr(full);
+  await runRetroOcr(full, cardCanvas);
 });
 
 els.btnRetryMrz.addEventListener('click', async () => {
@@ -657,7 +662,7 @@ els.btnRetryMrz.addEventListener('click', async () => {
   setStatus(els.statusMrz, "In attesa");
 });
 
-async function runRetroOcr(fullNativeCanvas){
+async function runRetroOcr(fullNativeCanvas, cardCanvas){
   els.progMrz.classList.add('show');
   els.progMrz.max = 1;
 
@@ -679,8 +684,6 @@ async function runRetroOcr(fullNativeCanvas){
   setStatus(els.statusMrz, "Leggo la carta (Google Vision)…");
   els.progMrz.value = 0.45;
   try{
-    const cardRect = nativeRect(els.videoMrz, false);
-    const cardCanvas = cropForCloud(els.videoMrz, cardRect, 2.0);
     const text = await ocrViaCloud(cardCanvas);
     rawLog += "----- RETRO — intera carta (Google Vision) -----\n" + text + "\n\n";
     els.rawText.value = rawLog;
