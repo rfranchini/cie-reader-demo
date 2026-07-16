@@ -92,8 +92,6 @@
     margin:0 0 12px;
   }
 
-  /* Anteprima fotocamera a dimensione fissa e prevedibile, indipendente
-     dall'orientamento/risoluzione nativa dello stream della fotocamera. */
   .cam-frame{
     position:relative;
     width:100%;
@@ -105,6 +103,7 @@
     display:none;
   }
   .cam-frame.active{ display:block; }
+  .cam-frame.wide{ aspect-ratio: 4 / 3; }
   video{
     position:absolute;
     inset:0;
@@ -123,6 +122,35 @@
     border:2px solid rgba(255,255,255,0.85);
     border-radius:10px;
     box-shadow:0 0 0 2000px rgba(0,0,0,0.45);
+  }
+  .zone-box{
+    position:absolute;
+    border:2px solid #ffd166;
+    background:rgba(255,209,102,0.14);
+    border-radius:4px;
+  }
+  .zone-label{
+    position:absolute;
+    font-family:var(--mono);
+    font-size:11px;
+    color:#101820;
+    background:#ffd166;
+    padding:2px 6px;
+    border-radius:4px;
+    white-space:nowrap;
+  }
+  .scan-pulse{
+    position:absolute;
+    left:0; right:0;
+    height:2px;
+    background:#4ade80;
+    box-shadow:0 0 8px 2px rgba(74,222,128,0.8);
+    animation: scan-move 1.8s ease-in-out infinite;
+  }
+  @keyframes scan-move{
+    0%{ top:8%; }
+    50%{ top:88%; }
+    100%{ top:8%; }
   }
   .cam-caption{
     position:absolute;
@@ -180,6 +208,7 @@
     min-height:16px;
   }
   .status.warn{ color:var(--warn); }
+  .status.ok{ color:#1a7f37; }
   progress{
     width:100%;
     height:6px;
@@ -267,23 +296,25 @@
 <div class="wrap">
 
   <header>
-    <div class="eyebrow">Demo — le foto vengono inviate a Google Cloud Vision per la lettura</div>
+    <div class="eyebrow">Demo — le foto per MRZ/fronte vengono inviate a Google Cloud Vision</div>
     <h1>Lettore Carta d'Identità</h1>
-    <p>Fotografa il retro della carta per leggere automaticamente i dati anagrafici e il codice fiscale, poi correggi a mano quello che serve prima di inviare.</p>
+    <p>Tre letture separate, ciascuna ottimizzata per il suo scopo: MRZ, codice a barre e fronte.</p>
   </header>
 
-  <!-- STEP 1: RETRO / MRZ + CF -->
+  <!-- STEP 1: MRZ -->
   <div class="step">
     <div class="step-head">
       <span class="step-num">1</span>
-      <h2>Retro della carta — dati anagrafici e codice fiscale</h2>
+      <h2>Retro — zona MRZ</h2>
     </div>
-    <p class="hint">Allinea la carta al riquadro bianco (la carta va tenuta orizzontale anche se il telefono è verticale). Un solo scatto legge sia la MRZ che il codice fiscale.</p>
+    <p class="hint">Inquadra la carta nel riquadro bianco: le 3 righe di testo maiuscolo con «&lt;» devono cadere nella fascia gialla in basso.</p>
 
     <div class="cam-frame" id="frameMrz">
       <video id="videoMrz" playsinline autoplay muted></video>
       <div class="cam-guide" id="guideMrz">
         <div class="card-box" id="cardBoxMrz"></div>
+        <div class="zone-box" id="mrzBandMrz"></div>
+        <div class="zone-label" id="mrzLabelMrz">Zona MRZ</div>
       </div>
       <div class="cam-caption">Inquadra il retro dentro il riquadro</div>
     </div>
@@ -298,11 +329,37 @@
     <div id="statusMrz" class="status">In attesa</div>
   </div>
 
-  <!-- STEP 2: FRONTE / luogo di nascita -->
+  <!-- STEP 2: BARCODE LIVE -->
   <div class="step">
     <div class="step-head">
       <span class="step-num">2</span>
-      <h2>Fronte della carta — luogo di nascita</h2>
+      <h2>Retro — codice fiscale (codice a barre)</h2>
+    </div>
+    <p class="hint">Lettura in diretta: appena il codice a barre (sopra la zona MRZ) viene inquadrato bene, si ferma da solo. Muovi leggermente la carta se non lo trova subito — aiuta anche inclinarla un po' per evitare i riflessi.</p>
+
+    <div class="cam-frame wide" id="frameBarcode">
+      <video id="videoBarcode" playsinline autoplay muted></video>
+      <div class="cam-guide" id="guideBarcode">
+        <div class="card-box" id="cardBoxBarcode"></div>
+        <div class="zone-box" id="barcodeZoneBox"></div>
+        <div class="zone-label" id="barcodeZoneLabel">Codice a barre</div>
+        <div class="scan-pulse" id="scanPulse"></div>
+      </div>
+      <div class="cam-caption">Ricerca automatica in corso…</div>
+    </div>
+
+    <div class="btn-row">
+      <button id="btnStartBarcode">Attiva fotocamera</button>
+      <button id="btnRetryBarcode" class="secondary" style="display:none">Riprova</button>
+    </div>
+    <div id="statusBarcode" class="status">In attesa</div>
+  </div>
+
+  <!-- STEP 3: FRONTE -->
+  <div class="step">
+    <div class="step-head">
+      <span class="step-num">3</span>
+      <h2>Fronte — luogo di nascita</h2>
     </div>
     <p class="hint">Il luogo di nascita non fa parte della zona a lettura ottica e si trova solo sul fronte. Verifica sempre a mano.</p>
 
@@ -324,10 +381,10 @@
     <div id="statusFront" class="status">In attesa</div>
   </div>
 
-  <!-- STEP 3: RISULTATI -->
+  <!-- STEP 4: RISULTATI -->
   <div class="step">
     <div class="step-head">
-      <span class="step-num">3</span>
+      <span class="step-num">4</span>
       <h2>Dati estratti</h2>
     </div>
     <p class="hint">Campi precompilati dalla lettura automatica. Controllali prima di inviare.</p>
@@ -371,10 +428,10 @@
     </details>
   </div>
 
-  <!-- STEP 4: INVIO -->
+  <!-- STEP 5: INVIO -->
   <div class="step">
     <div class="step-head">
-      <span class="step-num">4</span>
+      <span class="step-num">5</span>
       <h2>Invio alla piattaforma esterna</h2>
     </div>
     <p class="hint">Inserisci l'endpoint REST di destinazione. In una versione reale questa chiamata andrebbe fatta da un backend, non dal browser, per non esporre eventuali chiavi API.</p>
@@ -390,7 +447,7 @@
     <div id="statusSend" class="status"></div>
   </div>
 
-  <footer>OCR: Google Cloud Vision (via backend) · Codice fiscale: barcode letto nel browser</footer>
+  <footer>OCR: Google Cloud Vision (via backend) · Codice fiscale: barcode letto in diretta nel browser</footer>
 </div>
 
 <script>
@@ -398,12 +455,22 @@ const els = {
   frameMrz: document.getElementById('frameMrz'),
   videoMrz: document.getElementById('videoMrz'),
   cardBoxMrz: document.getElementById('cardBoxMrz'),
+  mrzBandMrz: document.getElementById('mrzBandMrz'),
+  mrzLabelMrz: document.getElementById('mrzLabelMrz'),
   thumbMrz: document.getElementById('thumbMrz'),
   btnStartMrz: document.getElementById('btnStartMrz'),
   btnShotMrz: document.getElementById('btnShotMrz'),
   btnRetryMrz: document.getElementById('btnRetryMrz'),
   statusMrz: document.getElementById('statusMrz'),
   progMrz: document.getElementById('progMrz'),
+
+  frameBarcode: document.getElementById('frameBarcode'),
+  videoBarcode: document.getElementById('videoBarcode'),
+  cardBoxBarcode: document.getElementById('cardBoxBarcode'),
+  barcodeZoneBox: document.getElementById('barcodeZoneBox'),
+  btnStartBarcode: document.getElementById('btnStartBarcode'),
+  btnRetryBarcode: document.getElementById('btnRetryBarcode'),
+  statusBarcode: document.getElementById('statusBarcode'),
 
   frameFront: document.getElementById('frameFront'),
   videoFront: document.getElementById('videoFront'),
@@ -423,16 +490,21 @@ const els = {
 
 let streamMrz = null;
 let streamFront = null;
+let barcodeReader = null;
+let barcodeStream = null;
 let rawLog = "";
 
 const CARD_RATIO = 85.60 / 53.98;
+const MRZ_BAND_RATIO = 0.34;
+const MAX_CLOUD_IMAGE_SIDE = 1600;
 
-function setStatus(node, text, warn){
+function setStatus(node, text, kind){
   node.textContent = text;
-  node.classList.toggle('warn', !!warn);
+  node.classList.toggle('warn', kind === 'warn');
+  node.classList.toggle('ok', kind === 'ok');
 }
 
-// ---------- Geometria guida (coordinate "visualizzate", cioè quelle che l'utente vede) ----------
+// ---------- Geometria guida ----------
 function computeCardRect(clientW, clientH){
   let w = clientW * 0.88;
   let h = w / CARD_RATIO;
@@ -445,27 +517,50 @@ function computeCardRect(clientW, clientH){
   return { x, y, w, h };
 }
 
-function sizeGuide(videoEl, boxEl){
+function sizeGuideCard(videoEl, boxEl){
   const clientW = videoEl.clientWidth;
   const clientH = videoEl.clientHeight;
   if(!clientW || !clientH) return;
   const card = computeCardRect(clientW, clientH);
-
   boxEl.style.left = card.x + 'px';
   boxEl.style.top = card.y + 'px';
   boxEl.style.width = card.w + 'px';
   boxEl.style.height = card.h + 'px';
+  return card;
 }
 
-// Il video usa object-fit:cover: la porzione visibile a schermo NON corrisponde 1:1
-// al frame nativo della fotocamera. Questa funzione converte un rettangolo in
-// coordinate "visualizzate" (quelle della guida) in coordinate pixel native del sensore.
+// Fascia MRZ: ultimo 34% in basso della carta.
+function sizeGuideMrzBand(videoEl, boxEl, bandEl, labelEl){
+  const card = sizeGuideCard(videoEl, boxEl);
+  if(!card) return;
+  const bandH = card.h * MRZ_BAND_RATIO;
+  const bandY = card.y + card.h - bandH;
+  bandEl.style.left = card.x + 'px';
+  bandEl.style.top = bandY + 'px';
+  bandEl.style.width = card.w + 'px';
+  bandEl.style.height = bandH + 'px';
+  labelEl.style.left = card.x + 'px';
+  labelEl.style.top = (bandY - 20) + 'px';
+}
+
+// Zona codice a barre: subito sopra la fascia MRZ (indicativamente dal 40% al 66% dell'altezza carta).
+function sizeGuideBarcodeZone(videoEl, boxEl, zoneEl){
+  const card = sizeGuideCard(videoEl, boxEl);
+  if(!card) return;
+  const zoneTop = card.y + card.h * 0.40;
+  const zoneH = card.h * 0.26;
+  zoneEl.style.left = card.x + 'px';
+  zoneEl.style.top = zoneTop + 'px';
+  zoneEl.style.width = card.w + 'px';
+  zoneEl.style.height = zoneH + 'px';
+}
+
 function toNativePixels(videoEl, dispRect){
   const clientW = videoEl.clientWidth;
   const clientH = videoEl.clientHeight;
   const vw = videoEl.videoWidth;
   const vh = videoEl.videoHeight;
-  const scale = Math.max(clientW / vw, clientH / vh); // fattore di scala usato da object-fit:cover
+  const scale = Math.max(clientW / vw, clientH / vh);
   const dispW = vw * scale;
   const dispH = vh * scale;
   const offsetX = (dispW - clientW) / 2;
@@ -478,21 +573,23 @@ function toNativePixels(videoEl, dispRect){
   };
 }
 
-function nativeRect(videoEl){
-  const clientW = videoEl.clientWidth;
-  const clientH = videoEl.clientHeight;
-  const card = computeCardRect(clientW, clientH);
+function nativeCardRect(videoEl){
+  const card = computeCardRect(videoEl.clientWidth, videoEl.clientHeight);
   return toNativePixels(videoEl, card);
 }
 
+function nativeMrzBandRect(videoEl){
+  const card = computeCardRect(videoEl.clientWidth, videoEl.clientHeight);
+  const bandH = card.h * MRZ_BAND_RATIO;
+  const band = { x: card.x, y: card.y + card.h - bandH, w: card.w, h: bandH };
+  return toNativePixels(videoEl, band);
+}
+
 // ---------- Camera helpers ----------
-async function startCamera(frameEl, videoEl){
+async function startCamera(frameEl, videoEl, opts){
   try{
     const stream = await navigator.mediaDevices.getUserMedia({
-      // Risoluzione moderata: basta e avanza per l'OCR ed evita che la foto,
-      // una volta ritagliata e ingrandita, superi il limite di ~4.5MB per
-      // richiesta imposto dalle funzioni serverless di Vercel.
-      video:{ facingMode: { ideal:"environment" }, width:{ ideal:1600 }, height:{ ideal:1200 } },
+      video:{ facingMode: { ideal:"environment" }, width:{ ideal:1600 }, height:{ ideal:1200 }, ...(opts||{}) },
       audio:false
     });
     videoEl.srcObject = stream;
@@ -507,18 +604,6 @@ async function startCamera(frameEl, videoEl){
 function stopStream(stream){
   if(stream){ stream.getTracks().forEach(t => t.stop()); }
 }
-
-function fullFrameCanvas(videoEl){
-  const canvas = document.createElement('canvas');
-  canvas.width = videoEl.videoWidth;
-  canvas.height = videoEl.videoHeight;
-  canvas.getContext('2d').drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-  return canvas;
-}
-
-// Tetto massimo (lato lungo, in pixel) per qualunque immagine inviata al backend:
-// mantiene il payload ben al di sotto del limite di ~4.5MB per richiesta di Vercel.
-const MAX_CLOUD_IMAGE_SIDE = 1600;
 
 function cropForCloud(videoEl, rect, upscale){
   let w = Math.max(1, Math.round(rect.w * upscale));
@@ -538,15 +623,12 @@ function cropForCloud(videoEl, rect, upscale){
 }
 
 function canvasToBase64(canvas){
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
   return dataUrl.split(',')[1];
 }
 
-// ---------- Chiamata al backend (Google Cloud Vision via funzione serverless) ----------
 async function ocrViaCloud(canvas){
   const imageBase64 = canvasToBase64(canvas);
-  const approxKB = Math.round(imageBase64.length * 0.75 / 1024);
-  console.log('[OCR] invio immagine, circa', approxKB, 'KB');
   const res = await fetch('/api/ocr', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -554,59 +636,21 @@ async function ocrViaCloud(canvas){
   });
   const data = await res.json();
   if(!res.ok){
-    throw new Error((data.error || ('Errore HTTP ' + res.status)) + ` [immagine ~${approxKB}KB]`);
+    throw new Error(data.error || ('Errore HTTP ' + res.status));
   }
   return data.text || '';
 }
 
-// ---------- Lettura codice a barre (Code 39, tipico del codice fiscale sulla CIE) ----------
-// I dati sulla CIE sono incisi al laser (basso contrasto, superficie plastica lucida),
-// quindi provo prima sull'immagine originale e, se fallisce, su una versione ad alto
-// contrasto pensata apposta per questo tipo di stampa.
-async function decodeBarcodeFromCanvas(canvas){
-  try{
-    const dataUrl = canvas.toDataURL('image/png');
-    const img = new Image();
-    img.src = dataUrl;
-    await img.decode();
-
-    const hints = new Map();
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      ZXing.BarcodeFormat.CODE_39,
-      ZXing.BarcodeFormat.CODE_128
-    ]);
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    const reader = new ZXing.BrowserMultiFormatReader(hints);
-    const result = await reader.decodeFromImageElement(img);
-    return (result.getText() || '').toUpperCase().trim();
-  }catch(err){
-    return null;
-  }
-}
-
-function enhanceForBarcode(canvas){
-  const out = document.createElement('canvas');
-  out.width = canvas.width;
-  out.height = canvas.height;
-  const ctx = out.getContext('2d');
-  ctx.filter = 'grayscale(1) contrast(2.3) brightness(1.08)';
-  ctx.drawImage(canvas, 0, 0);
-  return out;
-}
-
-async function tryBarcodeCf(canvas){
-  const plain = await decodeBarcodeFromCanvas(canvas);
-  if(plain) return plain;
-  return await decodeBarcodeFromCanvas(enhanceForBarcode(canvas));
-}
-
-// ---------- MRZ side ----------
+// =========================================================
+// STEP 1 — MRZ
+// =========================================================
 els.videoMrz.addEventListener('loadedmetadata', () => {
-  sizeGuide(els.videoMrz, els.cardBoxMrz);
+  sizeGuideMrzBand(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzLabelMrz);
 });
 window.addEventListener('resize', () => {
-  sizeGuide(els.videoMrz, els.cardBoxMrz);
-  sizeGuide(els.videoFront, els.cardBoxFront);
+  sizeGuideMrzBand(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzLabelMrz);
+  sizeGuideBarcodeZone(els.videoBarcode, els.cardBoxBarcode, els.barcodeZoneBox);
+  sizeGuideCard(els.videoFront, els.cardBoxFront);
 });
 
 els.btnStartMrz.addEventListener('click', async () => {
@@ -617,14 +661,11 @@ els.btnStartMrz.addEventListener('click', async () => {
 });
 
 els.btnShotMrz.addEventListener('click', async () => {
-  const full = fullFrameCanvas(els.videoMrz);
-  els.thumbMrz.src = full.toDataURL('image/jpeg', 0.9);
+  // Ritaglio calcolato PRIMA di fermare lo stream (altrimenti le dimensioni vanno a 0).
+  const bandRect = nativeMrzBandRect(els.videoMrz);
+  const bandCanvas = cropForCloud(els.videoMrz, bandRect, 3.2);
+  els.thumbMrz.src = bandCanvas.toDataURL('image/jpeg', 0.9);
   els.thumbMrz.classList.add('show');
-
-  // Il ritaglio va calcolato PRIMA di fermare lo stream: una volta fermato/nascosto
-  // il video, le sue dimensioni diventano 0 e il ritaglio risulterebbe vuoto.
-  const cardRect = nativeRect(els.videoMrz);
-  const cardCanvas = cropForCloud(els.videoMrz, cardRect, 2.0);
 
   els.frameMrz.classList.remove('active');
   stopStream(streamMrz);
@@ -632,10 +673,10 @@ els.btnShotMrz.addEventListener('click', async () => {
   els.btnStartMrz.style.display = 'none';
   els.btnRetryMrz.style.display = 'inline-block';
 
-  await runRetroOcr(cardCanvas);
+  await runMrzOcr(bandCanvas);
 });
 
-els.btnRetryMrz.addEventListener('click', async () => {
+els.btnRetryMrz.addEventListener('click', () => {
   els.thumbMrz.classList.remove('show');
   els.btnRetryMrz.style.display = 'none';
   els.btnStartMrz.style.display = 'inline-block';
@@ -643,59 +684,31 @@ els.btnRetryMrz.addEventListener('click', async () => {
   setStatus(els.statusMrz, "In attesa");
 });
 
-async function runRetroOcr(cardCanvas){
+async function runMrzOcr(bandCanvas){
   els.progMrz.classList.add('show');
+  els.progMrz.value = 0.3;
   els.progMrz.max = 1;
-
-  // --- 1) Codice fiscale dal codice a barre, sul ritaglio della sola carta
-  //        (niente sfondo attorno: il barcode occupa una porzione più grande
-  //        dell'immagine, molto più leggibile per ZXing) ---
-  setStatus(els.statusMrz, "Cerco il codice a barre del codice fiscale…");
-  els.progMrz.value = 0.15;
-  const barcodeText = await tryBarcodeCf(cardCanvas);
-  rawLog += "----- RETRO — tentativo lettura codice a barre -----\n" + (barcodeText || '(nessun barcode trovato)') + "\n\n";
-
-  const cfFlag = document.getElementById('flag-cf');
-  const cfFromBarcode = barcodeText && barcodeText.match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
-  if(cfFromBarcode){
-    document.getElementById('f-cf').value = cfFromBarcode[0];
-    cfFlag.textContent = 'CODICE A BARRE';
-    cfFlag.classList.remove('check');
-  }
-
-  // --- 2) MRZ + (fallback) codice fiscale: un'unica lettura di tutta la carta ---
-  setStatus(els.statusMrz, "Leggo la carta (Google Vision)…");
-  els.progMrz.value = 0.45;
+  setStatus(els.statusMrz, "Leggo la zona MRZ (Google Vision)…");
   try{
-    const text = await ocrViaCloud(cardCanvas);
-    rawLog += "----- RETRO — intera carta (Google Vision) -----\n" + text + "\n\n";
+    const text = await ocrViaCloud(bandCanvas);
+    els.progMrz.value = 0.9;
+    rawLog += "----- RETRO — zona MRZ (Google Vision) -----\n" + text + "\n\n";
     els.rawText.value = rawLog;
 
     const mrz = parseMrz(text);
     if(mrz){
       fillMrzFields(mrz);
+      setStatus(els.statusMrz, "MRZ letta correttamente", 'ok');
     } else {
-      setStatus(els.statusMrz, "MRZ non riconosciuta — controlla la foto qui sopra e valuta di rifare lo scatto", true);
+      setStatus(els.statusMrz, "MRZ non riconosciuta — controlla la foto qui sopra e valuta di rifare lo scatto", 'warn');
     }
   }catch(err){
-    rawLog += "----- Errore lettura retro -----\n" + err.message + "\n\n";
-    els.rawText.value = rawLog;
-    setStatus(els.statusMrz, "Errore nella lettura: " + err.message, true);
+    setStatus(els.statusMrz, "Errore: " + err.message, 'warn');
+  }finally{
+    els.progMrz.classList.remove('show');
   }
-
-  const mrzFilled = document.getElementById('f-cognome').value.length > 0;
-  const cfFilled = document.getElementById('f-cf').value.length > 0;
-  if(mrzFilled && cfFilled){
-    setStatus(els.statusMrz, "MRZ e codice fiscale letti correttamente");
-  } else if(mrzFilled){
-    setStatus(els.statusMrz, "MRZ letta — codice a barre del codice fiscale non trovato, rifai la foto inquadrandolo meglio oppure inserisci il codice a mano", true);
-  } else if(cfFilled){
-    setStatus(els.statusMrz, "Codice fiscale trovato — MRZ non riconosciuta, verifica gli altri campi a mano", true);
-  }
-  els.progMrz.classList.remove('show');
 }
 
-// ---------- MRZ parsing (ICAO 9303, TD1 — 3 righe da 30 caratteri) ----------
 function parseMrz(rawText){
   const candidates = rawText
     .toUpperCase()
@@ -764,9 +777,79 @@ function fillMrzFields(mrz){
   if(mrz.scadenza) document.getElementById('f-scad').value = mrz.scadenza;
 }
 
-// ---------- Fronte: luogo di nascita ----------
+// =========================================================
+// STEP 2 — CODICE A BARRE (lettura live, nessun invio al cloud)
+// =========================================================
+els.videoBarcode.addEventListener('loadedmetadata', () => {
+  sizeGuideBarcodeZone(els.videoBarcode, els.cardBoxBarcode, els.barcodeZoneBox);
+});
+
+els.btnStartBarcode.addEventListener('click', async () => {
+  els.btnStartBarcode.disabled = true;
+  setStatus(els.statusBarcode, "Avvio fotocamera…");
+  try{
+    barcodeStream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode: { ideal:"environment" }, width:{ ideal:1280 }, height:{ ideal:960 } },
+      audio:false
+    });
+    els.videoBarcode.srcObject = barcodeStream;
+    els.frameBarcode.classList.add('active');
+    setStatus(els.statusBarcode, "Ricerca in corso — inquadra il codice a barre…");
+
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.CODE_128
+    ]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    barcodeReader = new ZXing.BrowserMultiFormatReader(hints);
+
+    barcodeReader.decodeFromStream(barcodeStream, els.videoBarcode, (result, err) => {
+      if(result){
+        const text = (result.getText() || '').toUpperCase().trim();
+        const cfMatch = text.match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
+        if(cfMatch){
+          document.getElementById('f-cf').value = cfMatch[0];
+          const flag = document.getElementById('flag-cf');
+          flag.textContent = 'CODICE A BARRE';
+          flag.classList.remove('check');
+          setStatus(els.statusBarcode, "Codice fiscale letto: " + cfMatch[0], 'ok');
+          stopBarcodeScan();
+          els.btnStartBarcode.style.display = 'none';
+          els.btnRetryBarcode.style.display = 'inline-block';
+        }
+        // se il testo decodificato non è nel formato atteso, continuo a scansionare senza fermarmi
+      }
+      // gli errori "NotFoundException" per ogni fotogramma senza barcode sono normali, si ignorano
+    });
+  }catch(err){
+    setStatus(els.statusBarcode, "Errore fotocamera: " + err.message, 'warn');
+    els.btnStartBarcode.disabled = false;
+  }
+});
+
+function stopBarcodeScan(){
+  if(barcodeReader){
+    try{ barcodeReader.reset(); }catch(e){}
+    barcodeReader = null;
+  }
+  stopStream(barcodeStream);
+  barcodeStream = null;
+  els.frameBarcode.classList.remove('active');
+}
+
+els.btnRetryBarcode.addEventListener('click', () => {
+  els.btnRetryBarcode.style.display = 'none';
+  els.btnStartBarcode.style.display = 'inline-block';
+  els.btnStartBarcode.disabled = false;
+  setStatus(els.statusBarcode, "In attesa");
+});
+
+// =========================================================
+// STEP 3 — FRONTE (luogo di nascita)
+// =========================================================
 els.videoFront.addEventListener('loadedmetadata', () => {
-  sizeGuide(els.videoFront, els.cardBoxFront);
+  sizeGuideCard(els.videoFront, els.cardBoxFront);
 });
 
 els.btnStartFront.addEventListener('click', async () => {
@@ -777,7 +860,7 @@ els.btnStartFront.addEventListener('click', async () => {
 });
 
 els.btnShotFront.addEventListener('click', async () => {
-  const cardRect = nativeRect(els.videoFront);
+  const cardRect = nativeCardRect(els.videoFront);
   const cardCanvas = cropForCloud(els.videoFront, cardRect, 1.8);
   els.thumbFront.src = cardCanvas.toDataURL('image/jpeg', 0.9);
   els.thumbFront.classList.add('show');
@@ -791,7 +874,7 @@ els.btnShotFront.addEventListener('click', async () => {
   await runFrontOcr(cardCanvas);
 });
 
-els.btnRetryFront.addEventListener('click', async () => {
+els.btnRetryFront.addEventListener('click', () => {
   els.thumbFront.classList.remove('show');
   els.btnRetryFront.style.display = 'none';
   els.btnStartFront.style.display = 'inline-block';
@@ -813,21 +896,17 @@ async function runFrontOcr(canvas){
     const luogo = extractLuogoNascita(text);
     if(luogo){
       document.getElementById('f-luogo').value = luogo;
-      setStatus(els.statusFront, "Luogo di nascita individuato — verifica comunque a mano");
+      setStatus(els.statusFront, "Luogo di nascita individuato — verifica comunque a mano", 'ok');
     } else {
-      setStatus(els.statusFront, "Non ho trovato automaticamente il luogo di nascita — inseriscilo a mano guardando la foto qui sopra", true);
+      setStatus(els.statusFront, "Non ho trovato automaticamente il luogo di nascita — inseriscilo a mano guardando la foto qui sopra", 'warn');
     }
   }catch(err){
-    setStatus(els.statusFront, "Errore: " + err.message, true);
+    setStatus(els.statusFront, "Errore: " + err.message, 'warn');
   }finally{
     els.progFront.classList.remove('show');
   }
 }
 
-// La CIE stampa l'etichetta in due lingue su righe separate (es. "Luogo e data di nascita"
-// seguita da "Place of birth and date of birth") PRIMA del dato vero. Bisogna quindi saltare
-// tutte le righe "etichetta" (in entrambe le lingue) e prendere la prima riga successiva
-// che non è a sua volta un'etichetta.
 function extractLuogoNascita(text){
   const labelRe = /luogo\s*e?\s*data\s*di\s*nascita|luogo di nascita|place of birth|date of birth|nato a|nata a/i;
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
@@ -844,11 +923,13 @@ function extractLuogoNascita(text){
   return '';
 }
 
-// ---------- Invio ----------
+// =========================================================
+// STEP 5 — INVIO
+// =========================================================
 els.btnSend.addEventListener('click', async () => {
   const url = els.apiUrl.value.trim();
   if(!url){
-    setStatus(els.statusSend, "Inserisci prima l'URL dell'API", true);
+    setStatus(els.statusSend, "Inserisci prima l'URL dell'API", 'warn');
     return;
   }
   const payload = {
@@ -868,9 +949,9 @@ els.btnSend.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    setStatus(els.statusSend, res.ok ? "Inviato correttamente (" + res.status + ")" : "Risposta con errore (" + res.status + ")", !res.ok);
+    setStatus(els.statusSend, res.ok ? "Inviato correttamente (" + res.status + ")" : "Risposta con errore (" + res.status + ")", res.ok ? 'ok' : 'warn');
   }catch(err){
-    setStatus(els.statusSend, "Chiamata fallita: " + err.message + " — probabile blocco CORS lato server esterno", true);
+    setStatus(els.statusSend, "Chiamata fallita: " + err.message + " — probabile blocco CORS lato server esterno", 'warn');
   }
 });
 </script>
