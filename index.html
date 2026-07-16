@@ -572,6 +572,7 @@ async function tryBarcodeCf(canvas){
       ZXing.BarcodeFormat.CODE_39,
       ZXing.BarcodeFormat.CODE_128
     ]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
     const reader = new ZXing.BrowserMultiFormatReader(hints);
     const result = await reader.decodeFromImageElement(img);
     return (result.getText() || '').toUpperCase().trim();
@@ -612,7 +613,7 @@ els.btnShotMrz.addEventListener('click', async () => {
   els.btnStartMrz.style.display = 'none';
   els.btnRetryMrz.style.display = 'inline-block';
 
-  await runRetroOcr(full, cardCanvas);
+  await runRetroOcr(cardCanvas);
 });
 
 els.btnRetryMrz.addEventListener('click', async () => {
@@ -623,14 +624,16 @@ els.btnRetryMrz.addEventListener('click', async () => {
   setStatus(els.statusMrz, "In attesa");
 });
 
-async function runRetroOcr(fullNativeCanvas, cardCanvas){
+async function runRetroOcr(cardCanvas){
   els.progMrz.classList.add('show');
   els.progMrz.max = 1;
 
-  // --- 1) Codice fiscale dal codice a barre, sul frame intero nativo (indipendente dal ritaglio) ---
+  // --- 1) Codice fiscale dal codice a barre, sul ritaglio della sola carta
+  //        (niente sfondo attorno: il barcode occupa una porzione più grande
+  //        dell'immagine, molto più leggibile per ZXing) ---
   setStatus(els.statusMrz, "Cerco il codice a barre del codice fiscale…");
   els.progMrz.value = 0.15;
-  const barcodeText = await tryBarcodeCf(fullNativeCanvas);
+  const barcodeText = await tryBarcodeCf(cardCanvas);
   rawLog += "----- RETRO — tentativo lettura codice a barre -----\n" + (barcodeText || '(nessun barcode trovato)') + "\n\n";
 
   const cfFlag = document.getElementById('flag-cf');
