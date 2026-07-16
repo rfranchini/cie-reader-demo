@@ -124,22 +124,6 @@
     border-radius:10px;
     box-shadow:0 0 0 2000px rgba(0,0,0,0.45);
   }
-  .mrz-band{
-    position:absolute;
-    border:2px solid #ffd166;
-    background:rgba(255,209,102,0.14);
-    border-radius:4px;
-  }
-  .mrz-label{
-    position:absolute;
-    font-family:var(--mono);
-    font-size:11px;
-    color:#101820;
-    background:#ffd166;
-    padding:2px 6px;
-    border-radius:4px;
-    white-space:nowrap;
-  }
   .cam-caption{
     position:absolute;
     left:0; right:0; bottom:8px;
@@ -300,8 +284,6 @@
       <video id="videoMrz" playsinline autoplay muted></video>
       <div class="cam-guide" id="guideMrz">
         <div class="card-box" id="cardBoxMrz"></div>
-        <div class="mrz-band" id="mrzBandMrz"></div>
-        <div class="mrz-label" id="mrzLabelMrz">Zona MRZ</div>
       </div>
       <div class="cam-caption">Inquadra il retro dentro il riquadro</div>
     </div>
@@ -416,8 +398,6 @@ const els = {
   frameMrz: document.getElementById('frameMrz'),
   videoMrz: document.getElementById('videoMrz'),
   cardBoxMrz: document.getElementById('cardBoxMrz'),
-  mrzBandMrz: document.getElementById('mrzBandMrz'),
-  mrzLabelMrz: document.getElementById('mrzLabelMrz'),
   thumbMrz: document.getElementById('thumbMrz'),
   btnStartMrz: document.getElementById('btnStartMrz'),
   btnShotMrz: document.getElementById('btnShotMrz'),
@@ -446,7 +426,6 @@ let streamFront = null;
 let rawLog = "";
 
 const CARD_RATIO = 85.60 / 53.98;
-const MRZ_BAND_RATIO = 0.34;
 
 function setStatus(node, text, warn){
   node.textContent = text;
@@ -466,7 +445,7 @@ function computeCardRect(clientW, clientH){
   return { x, y, w, h };
 }
 
-function sizeGuide(videoEl, boxEl, bandEl, labelEl){
+function sizeGuide(videoEl, boxEl){
   const clientW = videoEl.clientWidth;
   const clientH = videoEl.clientHeight;
   if(!clientW || !clientH) return;
@@ -476,19 +455,6 @@ function sizeGuide(videoEl, boxEl, bandEl, labelEl){
   boxEl.style.top = card.y + 'px';
   boxEl.style.width = card.w + 'px';
   boxEl.style.height = card.h + 'px';
-
-  if(bandEl){
-    const bandH = card.h * MRZ_BAND_RATIO;
-    const bandY = card.y + card.h - bandH;
-    bandEl.style.left = card.x + 'px';
-    bandEl.style.top = bandY + 'px';
-    bandEl.style.width = card.w + 'px';
-    bandEl.style.height = bandH + 'px';
-    if(labelEl){
-      labelEl.style.left = card.x + 'px';
-      labelEl.style.top = (bandY - 20) + 'px';
-    }
-  }
 }
 
 // Il video usa object-fit:cover: la porzione visibile a schermo NON corrisponde 1:1
@@ -512,16 +478,11 @@ function toNativePixels(videoEl, dispRect){
   };
 }
 
-function nativeRect(videoEl, withMrzBand){
+function nativeRect(videoEl){
   const clientW = videoEl.clientWidth;
   const clientH = videoEl.clientHeight;
   const card = computeCardRect(clientW, clientH);
-  let rect = card;
-  if(withMrzBand){
-    const bandH = card.h * MRZ_BAND_RATIO;
-    rect = { x: card.x, y: card.y + card.h - bandH, w: card.w, h: bandH };
-  }
-  return toNativePixels(videoEl, rect);
+  return toNativePixels(videoEl, card);
 }
 
 // ---------- Camera helpers ----------
@@ -621,11 +582,11 @@ async function tryBarcodeCf(canvas){
 
 // ---------- MRZ side ----------
 els.videoMrz.addEventListener('loadedmetadata', () => {
-  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzLabelMrz);
+  sizeGuide(els.videoMrz, els.cardBoxMrz);
 });
 window.addEventListener('resize', () => {
-  sizeGuide(els.videoMrz, els.cardBoxMrz, els.mrzBandMrz, els.mrzLabelMrz);
-  sizeGuide(els.videoFront, els.cardBoxFront, null, null);
+  sizeGuide(els.videoMrz, els.cardBoxMrz);
+  sizeGuide(els.videoFront, els.cardBoxFront);
 });
 
 els.btnStartMrz.addEventListener('click', async () => {
@@ -642,7 +603,7 @@ els.btnShotMrz.addEventListener('click', async () => {
 
   // Il ritaglio va calcolato PRIMA di fermare lo stream: una volta fermato/nascosto
   // il video, le sue dimensioni diventano 0 e il ritaglio risulterebbe vuoto.
-  const cardRect = nativeRect(els.videoMrz, false);
+  const cardRect = nativeRect(els.videoMrz);
   const cardCanvas = cropForCloud(els.videoMrz, cardRect, 2.0);
 
   els.frameMrz.classList.remove('active');
@@ -694,15 +655,6 @@ async function runRetroOcr(fullNativeCanvas, cardCanvas){
     } else {
       setStatus(els.statusMrz, "MRZ non riconosciuta — controlla la foto qui sopra e valuta di rifare lo scatto", true);
     }
-
-    if(!cfFromBarcode){
-      const cfMatch = text.toUpperCase().replace(/\s+/g,'').match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
-      if(cfMatch){
-        document.getElementById('f-cf').value = cfMatch[0];
-        cfFlag.textContent = 'RETRO (OCR)';
-        cfFlag.classList.remove('check');
-      }
-    }
   }catch(err){
     rawLog += "----- Errore lettura retro -----\n" + err.message + "\n\n";
     els.rawText.value = rawLog;
@@ -714,7 +666,7 @@ async function runRetroOcr(fullNativeCanvas, cardCanvas){
   if(mrzFilled && cfFilled){
     setStatus(els.statusMrz, "MRZ e codice fiscale letti correttamente");
   } else if(mrzFilled){
-    setStatus(els.statusMrz, "MRZ letta — codice fiscale non trovato, inseriscilo a mano", true);
+    setStatus(els.statusMrz, "MRZ letta — codice a barre del codice fiscale non trovato, rifai la foto inquadrandolo meglio oppure inserisci il codice a mano", true);
   } else if(cfFilled){
     setStatus(els.statusMrz, "Codice fiscale trovato — MRZ non riconosciuta, verifica gli altri campi a mano", true);
   }
@@ -792,7 +744,7 @@ function fillMrzFields(mrz){
 
 // ---------- Fronte: luogo di nascita ----------
 els.videoFront.addEventListener('loadedmetadata', () => {
-  sizeGuide(els.videoFront, els.cardBoxFront, null, null);
+  sizeGuide(els.videoFront, els.cardBoxFront);
 });
 
 els.btnStartFront.addEventListener('click', async () => {
@@ -803,7 +755,7 @@ els.btnStartFront.addEventListener('click', async () => {
 });
 
 els.btnShotFront.addEventListener('click', async () => {
-  const cardRect = nativeRect(els.videoFront, false);
+  const cardRect = nativeRect(els.videoFront);
   const cardCanvas = cropForCloud(els.videoFront, cardRect, 1.8);
   els.thumbFront.src = cardCanvas.toDataURL('image/jpeg', 0.9);
   els.thumbFront.classList.add('show');
