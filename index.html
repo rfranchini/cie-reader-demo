@@ -560,7 +560,10 @@ async function ocrViaCloud(canvas){
 }
 
 // ---------- Lettura codice a barre (Code 39, tipico del codice fiscale sulla CIE) ----------
-async function tryBarcodeCf(canvas){
+// I dati sulla CIE sono incisi al laser (basso contrasto, superficie plastica lucida),
+// quindi provo prima sull'immagine originale e, se fallisce, su una versione ad alto
+// contrasto pensata apposta per questo tipo di stampa.
+async function decodeBarcodeFromCanvas(canvas){
   try{
     const dataUrl = canvas.toDataURL('image/png');
     const img = new Image();
@@ -579,6 +582,22 @@ async function tryBarcodeCf(canvas){
   }catch(err){
     return null;
   }
+}
+
+function enhanceForBarcode(canvas){
+  const out = document.createElement('canvas');
+  out.width = canvas.width;
+  out.height = canvas.height;
+  const ctx = out.getContext('2d');
+  ctx.filter = 'grayscale(1) contrast(2.3) brightness(1.08)';
+  ctx.drawImage(canvas, 0, 0);
+  return out;
+}
+
+async function tryBarcodeCf(canvas){
+  const plain = await decodeBarcodeFromCanvas(canvas);
+  if(plain) return plain;
+  return await decodeBarcodeFromCanvas(enhanceForBarcode(canvas));
 }
 
 // ---------- MRZ side ----------
