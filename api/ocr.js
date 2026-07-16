@@ -4,6 +4,17 @@
 // Configurazione richiesta su Vercel: Project Settings → Environment Variables →
 // aggiungi GOOGLE_VISION_API_KEY con il valore della tua chiave API di Google Cloud.
 
+// Legge manualmente il corpo grezzo della richiesta come stringa, per non dipendere
+// dal parsing automatico del body (che in alcuni setup non scatta).
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => { data += chunk; });
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Metodo non consentito, usa POST' });
@@ -16,14 +27,23 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { imageBase64 } = req.body || {};
+  // Leggo il corpo della richiesta "a mano" invece di fare affidamento sul parsing
+  // automatico di req.body: in alcuni setup (funzione fuori da un progetto Next.js)
+  // non viene popolato automaticamente e req.body risulta sempre undefined.
+  let body = req.body;
+  if (!body || typeof body === 'string') {
+    try {
+      const raw = typeof body === 'string' ? body : await readRawBody(req);
+      body = raw ? JSON.parse(raw) : {};
+    } catch (err) {
+      res.status(400).json({ error: 'Corpo della richiesta non leggibile come JSON: ' + err.message });
+      return;
+    }
+  }
+
+  const { imageBase64 } = body || {};
   if (!imageBase64) {
-    // Se il corpo arriva vuoto quasi sempre è perché l'immagine supera il limite
-    // di ~4.5MB per richiesta delle funzioni serverless di Vercel: la richiesta
-    // viene scartata dalla piattaforma prima ancora di raggiungere questo codice.
-    res.status(400).json({
-      error: 'imageBase64 mancante — probabile immagine troppo grande (limite ~4.5MB per richiesta su Vercel)',
-    });
+    res.status(400).json({ error: 'imageBase64 mancante nel corpo della richiesta' });
     return;
   }
 
