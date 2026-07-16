@@ -92,9 +92,13 @@
     margin:0 0 12px;
   }
 
+  /* Anteprima fotocamera a dimensione fissa e prevedibile, indipendente
+     dall'orientamento/risoluzione nativa dello stream della fotocamera. */
   .cam-frame{
     position:relative;
     width:100%;
+    aspect-ratio: 3 / 4;
+    max-height:60vh;
     border-radius:8px;
     overflow:hidden;
     background:#000;
@@ -102,9 +106,12 @@
   }
   .cam-frame.active{ display:block; }
   video{
-    display:block;
+    position:absolute;
+    inset:0;
     width:100%;
-    height:auto;
+    height:100%;
+    object-fit:cover;
+    display:block;
   }
   .cam-guide{
     position:absolute;
@@ -287,7 +294,7 @@
       <span class="step-num">1</span>
       <h2>Retro della carta — dati anagrafici e codice fiscale</h2>
     </div>
-    <p class="hint">Allinea la carta al riquadro bianco. La fascia gialla in basso deve contenere le 3 righe di testo maiuscolo con i simboli «&lt;».</p>
+    <p class="hint">Allinea la carta al riquadro bianco (la carta va tenuta orizzontale anche se il telefono è verticale). Un solo scatto legge sia la MRZ che il codice fiscale.</p>
 
     <div class="cam-frame" id="frameMrz">
       <video id="videoMrz" playsinline autoplay muted></video>
@@ -446,12 +453,12 @@ function setStatus(node, text, warn){
   node.classList.toggle('warn', !!warn);
 }
 
-// ---------- Geometria guida ----------
+// ---------- Geometria guida (coordinate "visualizzate", cioè quelle che l'utente vede) ----------
 function computeCardRect(clientW, clientH){
-  let w = clientW * 0.92;
+  let w = clientW * 0.88;
   let h = w / CARD_RATIO;
-  if(h > clientH * 0.85){
-    h = clientH * 0.85;
+  if(h > clientH * 0.8){
+    h = clientH * 0.8;
     w = h * CARD_RATIO;
   }
   const x = (clientW - w) / 2;
@@ -484,30 +491,44 @@ function sizeGuide(videoEl, boxEl, bandEl, labelEl){
   }
 }
 
+// Il video usa object-fit:cover: la porzione visibile a schermo NON corrisponde 1:1
+// al frame nativo della fotocamera. Questa funzione converte un rettangolo in
+// coordinate "visualizzate" (quelle della guida) in coordinate pixel native del sensore.
+function toNativePixels(videoEl, dispRect){
+  const clientW = videoEl.clientWidth;
+  const clientH = videoEl.clientHeight;
+  const vw = videoEl.videoWidth;
+  const vh = videoEl.videoHeight;
+  const scale = Math.max(clientW / vw, clientH / vh); // fattore di scala usato da object-fit:cover
+  const dispW = vw * scale;
+  const dispH = vh * scale;
+  const offsetX = (dispW - clientW) / 2;
+  const offsetY = (dispH - clientH) / 2;
+  return {
+    x: Math.round((dispRect.x + offsetX) / scale),
+    y: Math.round((dispRect.y + offsetY) / scale),
+    w: Math.round(dispRect.w / scale),
+    h: Math.round(dispRect.h / scale),
+  };
+}
+
 function nativeRect(videoEl, withMrzBand){
   const clientW = videoEl.clientWidth;
   const clientH = videoEl.clientHeight;
-  const scale = videoEl.videoWidth / clientW;
   const card = computeCardRect(clientW, clientH);
-
   let rect = card;
   if(withMrzBand){
     const bandH = card.h * MRZ_BAND_RATIO;
     rect = { x: card.x, y: card.y + card.h - bandH, w: card.w, h: bandH };
   }
-  return {
-    x: Math.round(rect.x * scale),
-    y: Math.round(rect.y * scale),
-    w: Math.round(rect.w * scale),
-    h: Math.round(rect.h * scale),
-  };
+  return toNativePixels(videoEl, rect);
 }
 
 // ---------- Camera helpers ----------
 async function startCamera(frameEl, videoEl){
   try{
     const stream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode: { ideal:"environment" }, width:{ ideal:1920 }, height:{ ideal:1080 } },
+      video:{ facingMode: { ideal:"environment" } },
       audio:false
     });
     videoEl.srcObject = stream;
@@ -531,8 +552,6 @@ function fullFrameCanvas(videoEl){
   return canvas;
 }
 
-// Ritaglio "pulito" per il cloud OCR: solo ingrandimento, senza filtri aggressivi
-// (Google Vision lavora bene su immagini naturali, a differenza di Tesseract).
 function cropForCloud(videoEl, rect, upscale){
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(rect.w * upscale));
@@ -621,14 +640,14 @@ els.btnRetryMrz.addEventListener('click', async () => {
   setStatus(els.statusMrz, "In attesa");
 });
 
-async function runRetroOcr(fullCanvas){
+async function runRetroOcr(fullNativeCanvas){
   els.progMrz.classList.add('show');
   els.progMrz.max = 1;
 
-  // --- 1) Codice fiscale dal codice a barre (client-side, indipendente dal cloud) ---
+  // --- 1) Codice fiscale dal codice a barre, sul frame intero nativo (indipendente dal ritaglio) ---
   setStatus(els.statusMrz, "Cerco il codice a barre del codice fiscale…");
   els.progMrz.value = 0.15;
-  const barcodeText = await tryBarcodeCf(fullCanvas);
+  const barcodeText = await tryBarcodeCf(fullNativeCanvas);
   rawLog += "----- RETRO — tentativo lettura codice a barre -----\n" + (barcodeText || '(nessun barcode trovato)') + "\n\n";
 
   const cfFlag = document.getElementById('flag-cf');
@@ -639,45 +658,35 @@ async function runRetroOcr(fullCanvas){
     cfFlag.classList.remove('check');
   }
 
-  // --- 2) MRZ — invio la fascia ritagliata a Google Vision tramite il nostro backend ---
-  setStatus(els.statusMrz, "Leggo la MRZ (Google Vision)…");
-  els.progMrz.value = 0.4;
+  // --- 2) MRZ + (fallback) codice fiscale: un'unica lettura di tutta la carta ---
+  setStatus(els.statusMrz, "Leggo la carta (Google Vision)…");
+  els.progMrz.value = 0.45;
   try{
-    const bandRect = nativeRect(els.videoMrz, true);
-    const bandCanvas = cropForCloud(els.videoMrz, bandRect, 2.5);
-    const mrzText = await ocrViaCloud(bandCanvas);
-    rawLog += "----- RETRO — MRZ (Google Vision) -----\n" + mrzText + "\n\n";
+    const cardRect = nativeRect(els.videoMrz, false);
+    const cardCanvas = cropForCloud(els.videoMrz, cardRect, 2.0);
+    const text = await ocrViaCloud(cardCanvas);
+    rawLog += "----- RETRO — intera carta (Google Vision) -----\n" + text + "\n\n";
     els.rawText.value = rawLog;
 
-    const mrz = parseMrz(mrzText);
+    const mrz = parseMrz(text);
     if(mrz){
       fillMrzFields(mrz);
     } else {
       setStatus(els.statusMrz, "MRZ non riconosciuta — controlla la foto qui sopra e valuta di rifare lo scatto", true);
     }
-  }catch(err){
-    rawLog += "----- Errore lettura MRZ -----\n" + err.message + "\n\n";
-    els.rawText.value = rawLog;
-    setStatus(els.statusMrz, "Errore nella lettura MRZ: " + err.message, true);
-  }
 
-  // --- 3) Se il barcode non ha dato nulla, provo il CF via OCR sull'intera carta ---
-  if(!cfFromBarcode){
-    setStatus(els.statusMrz, "Barcode non trovato — provo il codice fiscale via OCR…");
-    els.progMrz.value = 0.8;
-    try{
-      const cardRect = nativeRect(els.videoMrz, false);
-      const cardCanvas = cropForCloud(els.videoMrz, cardRect, 1.8);
-      const cardText = await ocrViaCloud(cardCanvas);
-      rawLog += "----- RETRO — intera carta, ricerca CF (Google Vision) -----\n" + cardText + "\n\n";
-      els.rawText.value = rawLog;
-      const cfMatch = cardText.toUpperCase().replace(/\s+/g,'').match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
+    if(!cfFromBarcode){
+      const cfMatch = text.toUpperCase().replace(/\s+/g,'').match(/[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]/);
       if(cfMatch){
         document.getElementById('f-cf').value = cfMatch[0];
         cfFlag.textContent = 'RETRO (OCR)';
         cfFlag.classList.remove('check');
       }
-    }catch(err){ /* fallback silenzioso */ }
+    }
+  }catch(err){
+    rawLog += "----- Errore lettura retro -----\n" + err.message + "\n\n";
+    els.rawText.value = rawLog;
+    setStatus(els.statusMrz, "Errore nella lettura: " + err.message, true);
   }
 
   const mrzFilled = document.getElementById('f-cognome').value.length > 0;
@@ -687,7 +696,7 @@ async function runRetroOcr(fullCanvas){
   } else if(mrzFilled){
     setStatus(els.statusMrz, "MRZ letta — codice fiscale non trovato, inseriscilo a mano", true);
   } else if(cfFilled){
-    setStatus(els.statusMrz, "Codice fiscale trovato — MRZ incompleta, verifica gli altri campi a mano", true);
+    setStatus(els.statusMrz, "Codice fiscale trovato — MRZ non riconosciuta, verifica gli altri campi a mano", true);
   }
   els.progMrz.classList.remove('show');
 }
@@ -807,16 +816,9 @@ async function runFrontOcr(canvas){
     rawLog += "----- FRONTE (Google Vision) -----\n" + text + "\n\n";
     els.rawText.value = rawLog;
 
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    let luogo = '';
-    for(let i=0;i<lines.length;i++){
-      if(/luogo\s*e?\s*data\s*di\s*nascita|luogo di nascita|nato a|nata a/i.test(lines[i])){
-        luogo = (lines[i].split(/luogo\s*e?\s*data\s*di\s*nascita|luogo di nascita|nato a|nata a/i)[1] || lines[i+1] || '').trim();
-        break;
-      }
-    }
+    const luogo = extractLuogoNascita(text);
     if(luogo){
-      document.getElementById('f-luogo').value = luogo.replace(/[^A-Za-zÀ-ÿ' ]/g, '').trim();
+      document.getElementById('f-luogo').value = luogo;
       setStatus(els.statusFront, "Luogo di nascita individuato — verifica comunque a mano");
     } else {
       setStatus(els.statusFront, "Non ho trovato automaticamente il luogo di nascita — inseriscilo a mano guardando la foto qui sopra", true);
@@ -826,6 +828,26 @@ async function runFrontOcr(canvas){
   }finally{
     els.progFront.classList.remove('show');
   }
+}
+
+// La CIE stampa l'etichetta in due lingue su righe separate (es. "Luogo e data di nascita"
+// seguita da "Place of birth and date of birth") PRIMA del dato vero. Bisogna quindi saltare
+// tutte le righe "etichetta" (in entrambe le lingue) e prendere la prima riga successiva
+// che non è a sua volta un'etichetta.
+function extractLuogoNascita(text){
+  const labelRe = /luogo\s*e?\s*data\s*di\s*nascita|luogo di nascita|place of birth|date of birth|nato a|nata a/i;
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+  for(let i = 0; i < lines.length; i++){
+    if(labelRe.test(lines[i])){
+      for(let j = i + 1; j < lines.length; j++){
+        if(lines[j].length > 1 && !labelRe.test(lines[j])){
+          return lines[j].replace(/[^A-Za-zÀ-ÿ' ]/g, '').trim();
+        }
+      }
+    }
+  }
+  return '';
 }
 
 // ---------- Invio ----------
