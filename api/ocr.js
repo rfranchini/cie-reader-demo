@@ -18,7 +18,12 @@ export default async function handler(req, res) {
 
   const { imageBase64 } = req.body || {};
   if (!imageBase64) {
-    res.status(400).json({ error: 'imageBase64 mancante nel corpo della richiesta' });
+    // Se il corpo arriva vuoto quasi sempre è perché l'immagine supera il limite
+    // di ~4.5MB per richiesta delle funzioni serverless di Vercel: la richiesta
+    // viene scartata dalla piattaforma prima ancora di raggiungere questo codice.
+    res.status(400).json({
+      error: 'imageBase64 mancante — probabile immagine troppo grande (limite ~4.5MB per richiesta su Vercel)',
+    });
     return;
   }
 
